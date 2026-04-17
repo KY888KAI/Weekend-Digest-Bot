@@ -67,8 +67,6 @@ GEMINI_PROMPT_1_HOLIDAY = (
     "根據以上確認數據，統整連假期間的重點事件與市場情緒，以下面格式範例整理，"
 )
 # 共用的後半段 prompt
-# {publish_date}：發文當天日期，格式 YYYY/M/D
-# {week_ref}：週日模式="下週"，連假模式="本週"
 GEMINI_PROMPT_1_TEMPLATE = (
     "{intro}"
     "【發文日期】今天是 {publish_date}，文章標題首句日期請使用此日期。\n"
@@ -992,7 +990,7 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
                 await page.wait_for_timeout(1_000)
             if await _modal_appeared():
                 modal_opened = True
-                ts("  發文 modal 已開啟")
+                ts("  發文 modal 已开启")
                 break
 
         if modal_opened:
@@ -1004,21 +1002,19 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         raise RuntimeError("點擊發文按鈕後 modal 未開啟，請確認是否已成功登入")
     await page.wait_for_timeout(1_500)
 
-    # ── 輸入標題 (人類視覺定位法) ──
+    # ── 輸入標題 (精準可見元件定位法) ──
     ts(f"輸入標題：{title}")
-    # 放棄找底層標籤，直接找畫面上寫著「加上標題」的浮水印框框
-    title_box = page.get_by_placeholder("加上標題").first
-    await title_box.click(timeout=5000)
-    await page.keyboard.type(title, delay=50)
+    # 使用 :visible 偽類，過濾掉所有隱藏的手機版或殘留元件，只抓畫面上真正顯示的那一個
+    title_box = page.locator('textarea[name="postTitle"]:visible').first
+    await title_box.fill(title, timeout=5000)
     await page.wait_for_timeout(500)
 
-    # ── 輸入內文 (人類視覺定位法) ──
+    # ── 輸入內文 (精準可見元件定位法) ──
     ts("輸入內文...")
-    # 直接找畫面上寫著「來聊聊股市話題」的浮水印框框
-    body_box = page.get_by_placeholder("來聊聊股市話題").first
-    await body_box.click(timeout=5000)
-    await page.keyboard.type(body, delay=20)
+    body_box = page.locator('textarea[name="inputValue"]:visible').first
+    await body_box.fill(body, timeout=5000)
     await page.wait_for_timeout(500)
+
     # ── 發文模式選擇 ──────────────────────────────────────────
     if test_mode:
         ts("【測試】點擊「立即發文」下拉 → 選擇「排程發文」...")
@@ -1194,7 +1190,7 @@ async def stage3_push(ctx: BrowserContext, push_content: str, deeplink: str):
         await page.goto(PUSH_URL, wait_until="domcontentloaded", timeout=60_000)
         await page.wait_for_timeout(3_000)
     else:
-        ts("  推播後台 cookie 有效，已略過登入")
+        ts("  推播後台 cookie 有有效，已略過登入")
 
     today = datetime.now().strftime("%Y-%m-%d")
     push_datetime = f"{today}T{PUSH_TIME_STR}"
