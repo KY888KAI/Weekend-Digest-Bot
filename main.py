@@ -67,8 +67,6 @@ GEMINI_PROMPT_1_HOLIDAY = (
     "根據以上確認數據，統整連假期間的重點事件與市場情緒，以下面格式範例整理，"
 )
 # 共用的後半段 prompt
-# {publish_date}：發文當天日期，格式 YYYY/M/D
-# {week_ref}：週日模式="下週"，連假模式="本週"
 GEMINI_PROMPT_1_TEMPLATE = (
     "{intro}"
     "【發文日期】今天是 {publish_date}，文章標題首句日期請使用此日期。\n"
@@ -112,7 +110,6 @@ def _fetch_market_data(run_mode: str = "sunday", holiday_start=None, holiday_end
     else:
         return _fetch_holiday_days(holiday_start, holiday_end)
 
-
 def _fetch_single_day() -> str:
     ts("抓取週五收盤數據...")
     weekday_map = {0:"週一",1:"週二",2:"週三",3:"週四",4:"週五",5:"週六",6:"週日"}
@@ -144,7 +141,6 @@ def _fetch_single_day() -> str:
 
     header = f"- {wd}美股主要指數表現（{ds}）："
     return header + "\n" + "\n".join(lines)
-
 
 def _fetch_holiday_days(holiday_start, holiday_end=None) -> str:
     ts("抓取連假期間美股歷史數據（需稍候 10-20 秒）...")
@@ -258,13 +254,11 @@ def _fetch_tw_calendar(year: int) -> dict:
         log.warning(f"無法取得台灣行事曆資料：{e}，改用本地判斷")
         return {}
 
-
 def is_holiday(date: datetime, calendar: dict) -> bool:
     key = date.strftime("%Y%m%d")
     if key in calendar:
         return calendar[key]
     return date.weekday() >= 5
-
 
 def get_run_mode(force: bool = False, test_mode: bool = False, test_holiday: bool = False):
     today    = datetime.now().date()
@@ -318,7 +312,6 @@ def get_run_mode(force: bool = False, test_mode: bool = False, test_holiday: boo
         ts(f"今天 ({today}) 不符合執行條件，略過")
     return None, None, None
 
-
 def _find_last_real_holiday(today, cal: dict):
     def _is_hol(d):
         return bool(cal.get(d.strftime("%Y%m%d"), False))
@@ -346,7 +339,6 @@ def _find_last_real_holiday(today, cal: dict):
             continue
         d -= timedelta(days=1)
     return None, None
-
 
 def _find_holiday_start(last_day, calendar: dict = None) -> "date":
     from datetime import date as date_type
@@ -585,7 +577,6 @@ async def _gemini_is_logged_in(page: Page) -> bool:
         pass
     return False
 
-
 async def _gemini_new_chat(page: Page):
     candidates = [
         'a:has-text("新的對話")',
@@ -609,7 +600,6 @@ async def _gemini_new_chat(page: Page):
     ts("  找不到新的對話按鈕，直接導向新對話頁面")
     await page.goto("https://gemini.google.com/app", wait_until="domcontentloaded", timeout=60_000)
     await page.wait_for_timeout(2_000)
-
 
 async def _gemini_select_pro(page: Page):
     trigger_sels = [
@@ -644,7 +634,6 @@ async def _gemini_select_pro(page: Page):
         except Exception:
             pass
     ts("  提示：未找到模型切換按鈕，繼續使用目前模型")
-
 
 async def _gemini_send(page: Page, message: str):
     input_sels = [
@@ -685,7 +674,6 @@ async def _gemini_send(page: Page, message: str):
 
     await page.keyboard.press("Enter")
     await page.wait_for_timeout(1_000)
-
 
 async def _gemini_get_last_response(page: Page, timeout_s: int = 180) -> str:
     stop_sel = (
@@ -749,12 +737,10 @@ async def _gemini_get_last_response(page: Page, timeout_s: int = 180) -> str:
 
     raise RuntimeError("無法擷取 Gemini 回應內容")
 
-
 async def _save_cookies(ctx: BrowserContext, cookie_file: Path):
     cookies = await ctx.cookies()
     cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2), "utf-8")
     ts(f"  已儲存 cookies → {cookie_file.name}（{len(cookies)} 筆）")
-
 
 def _extract_index_lines(text: str) -> list:
     result = []
@@ -764,7 +750,6 @@ def _extract_index_lines(text: str) -> list:
         pct  = float(m.group(3)) * sign
         result.append((name, pct))
     return result
-
 
 def _verify_numbers(market_block: str, gemini_text: str, tolerance: float = 0.05) -> list:
     expected  = _extract_index_lines(market_block)
@@ -783,7 +768,6 @@ def _verify_numbers(market_block: str, gemini_text: str, tolerance: float = 0.05
             errors.append(f"{name}：應為{exp_dir}{abs(exp_pct):.2f}%（未在輸出中找到正確數字）")
 
     return errors
-
 
 def _parse_article(text: str):
     lines = text.splitlines()
@@ -816,7 +800,6 @@ def _parse_article(text: str):
     if not title:
         title = lines[0].strip() if lines else ""
     return title, body
-
 
 def _clean_push_text(raw: str) -> str:
     for line in raw.splitlines():
@@ -938,7 +921,6 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
 
     ts("點擊發文按鈕...")
 
-    # 點擊左側真實發文按鈕
     async def _click_post_btn() -> bool:
         result = await page.evaluate("""() => {
             const dialog = document.querySelector('.dialog__content');
@@ -977,10 +959,8 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
             return True
         return False
 
-    # 100% 根據你的 HTML 精準抓取
     async def _modal_appeared() -> bool:
         try:
-            # HTML 中主要發文框是 textarea[name="inputValue"]
             return await page.locator('textarea[name="inputValue"]').first.is_visible(timeout=3000)
         except:
             return False
@@ -1016,12 +996,10 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         raise RuntimeError("點擊發文按鈕後 modal 未開啟，請確認是否已成功登入")
     await page.wait_for_timeout(1_500)
 
-    # ── 輸入標題 ──
+    # ── 輸入標題 (強制模擬真人打字) ──
     ts(f"輸入標題：{title}")
-    title_el = page.locator('textarea[name="postTitle"]')
-    
-    # 根據你的 HTML，如果標題框沒出現，點底部的「加標題」
-    if not await title_el.first.is_visible():
+    title_el = page.locator('textarea[name="postTitle"]').first
+    if not await title_el.is_visible():
         ts("  標題輸入框尚未展開，點擊底部「加標題」...")
         try:
             await page.locator('.modalAttach__text:has-text("加標題")').first.click(timeout=2000)
@@ -1029,13 +1007,15 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         except Exception as e:
             ts(f"  展開標題失敗: {e}")
 
-    await title_el.first.fill(title, timeout=5000)
-    await page.wait_for_timeout(300)
+    await title_el.click(timeout=5000)
+    await page.keyboard.type(title, delay=50)
+    await page.wait_for_timeout(500)
 
-    # ── 輸入內文 ──
+    # ── 輸入內文 (強制模擬真人打字) ──
     ts("輸入內文...")
-    body_el = page.locator('textarea[name="inputValue"]')
-    await body_el.first.fill(body, timeout=5000)
+    body_el = page.locator('textarea[name="inputValue"]').first
+    await body_el.click(timeout=5000)
+    await page.keyboard.type(body, delay=20)
     await page.wait_for_timeout(500)
 
     # ── 發文模式選擇 ──────────────────────────────────────────
@@ -1049,13 +1029,10 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         article_id = await _get_scheduled_article_id(page)
     else:
         ts("點擊底部「發文」送出...")
-        submit_btns = page.locator('button.messageModal__submit, button:has-text("發文")')
-        cnt = await submit_btns.count()
-        if cnt > 0:
-            await submit_btns.last.click()
-            ts("  已點擊發文")
-        else:
-            raise RuntimeError("找不到底部發文按鈕")
+        # 嚴格綁死 modal 內部的發文按鈕
+        submit_btn = page.locator('.messageModal__submit').first
+        await submit_btn.click(timeout=5000)
+        ts("  已點擊發文")
 
         ts("等待發文完成...")
         await page.wait_for_timeout(5_000)
@@ -1083,49 +1060,15 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
 
 
 async def _select_schedule_post(page: Page):
-    for _ in range(20):
-        found = await page.evaluate("""() => {
-            const el = document.querySelector('.cm-dropdown__btn');
-            if (!el) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        }""")
-        if found:
-            break
-        await page.wait_for_timeout(500)
-    ts("  已偵測到下拉按鈕")
+    ts("展開排程下拉選單...")
+    dropdown_btn = page.locator('.cm-dropdown__btn').first
+    await dropdown_btn.click(timeout=5000)
+    await page.wait_for_timeout(1000)
 
-    clicked_btn = await page.evaluate("""() => {
-        const btn = document.querySelector('.cm-dropdown__btn');
-        if (!btn) return '✗ 找不到 .cm-dropdown__btn';
-        const r = btn.getBoundingClientRect();
-        if (r.width === 0) return '✗ btn 不可見 rect=' + JSON.stringify({w:r.width,h:r.height});
-        const txt = btn.innerText.trim();
-        if (txt.includes('排程')) return '已是排程發文，略過';
-        btn.click();
-        return '已點擊：' + txt;
-    }""")
-    ts(f"  下拉按鈕：{clicked_btn}")
-
-    await page.wait_for_timeout(1_500)
-
-    clicked_option = await page.evaluate("""() => {
-        const isVisible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-        const all = Array.from(document.querySelectorAll('*'));
-        const exact = all.find(el => el.children.length === 0 &&
-            el.innerText && el.innerText.trim() === '排程發文' && isVisible(el));
-        if (exact) { exact.click(); return '精確葉節點:' + exact.className; }
-        const loose = all.find(el =>
-            el.innerText && el.innerText.trim().includes('排程發文') && isVisible(el));
-        if (loose) { loose.click(); return '模糊匹配:' + loose.className; }
-        return null;
-    }""")
-    if clicked_option:
-        ts(f"  已點擊「排程發文」（{clicked_option}）")
-    elif "略過" not in str(clicked_btn):
-        raise RuntimeError("無法點擊「排程發文」選項")
-
-    await page.wait_for_timeout(1_000)
+    ts("點擊排程發文選項...")
+    schedule_opt = page.locator('text="排程發文"').last
+    await schedule_opt.click(timeout=5000)
+    await page.wait_for_timeout(1000)
 
     future = datetime.now() + timedelta(days=6)
     schedule_str = future.strftime("%Y-%m-%d 23:59")
@@ -1155,13 +1098,10 @@ async def _select_schedule_post(page: Page):
 
     await page.wait_for_timeout(800)
 
-    submit_btns = page.locator('button.messageModal__submit, button:has-text("發文")')
-    cnt = await submit_btns.count()
-    if cnt > 0:
-        await submit_btns.last.click()
-        ts("  已點擊發文（排程）")
-    else:
-        raise RuntimeError("找不到排程發文的送出按鈕")
+    # 嚴格綁死 modal 內部的排程送出按鈕
+    submit_btn = page.locator('.messageModal__submit').first
+    await submit_btn.click(timeout=5000)
+    ts("  已點擊發文（排程）")
 
 
 async def _get_scheduled_article_id(page: Page) -> str:
