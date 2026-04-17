@@ -1303,73 +1303,37 @@ async def _wait_for_article_id_response(page: Page, timeout_s: int = 10) -> str:
 
 
 async def _get_scheduled_article_id(page: Page) -> str:
-    ts("前往個人頁面取得排程文章 ID...")
-    await page.goto(CMONEY_USER_PAGE, wait_until="domcontentloaded", timeout=60_000)
+    # 直接組合出「已排程文章」的獨立網址
+    scheduled_page_url = CMONEY_USER_PAGE + "/scheduled-article"
+    ts(f"前往已排程文章頁面取得 ID...")
+    
+    await page.goto(scheduled_page_url, wait_until="domcontentloaded", timeout=60_000)
+    await page.wait_for_timeout(3_000)
+
+    # 模擬您手動的操作：強制重整畫面以確保抓到最新狀態
+    ts("  執行頁面重整 (Reload)，確保排程列表更新...")
+    await page.reload(wait_until="domcontentloaded")
     await page.wait_for_timeout(4_000)
 
-    # 印出頁面上所有可點選的 tab / button 文字（用於診斷）
-    all_tabs = await page.evaluate("""() => {
-        const isVisible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-        return Array.from(document.querySelectorAll(
-            '[role="tab"], .nav-item, .tab, button, a.tab-link'
-        ))
-        .filter(el => el.innerText && el.innerText.trim() && isVisible(el))
-        .map(el => el.innerText.trim().replace(/\\s+/g,' ').slice(0, 30));
-    }""")
-    ts(f"  頁面分頁/按鈕：{all_tabs[:10]}")
-
-    ts("  尋找排程文章分頁...")
-    clicked = await page.evaluate("""() => {
-        const isVisible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-        const keywords = ['已排程', '排程文章', '排程', 'scheduled'];
-        const all = Array.from(document.querySelectorAll('*'));
-        for (const kw of keywords) {
-            const el = all.find(e =>
-                e.innerText && e.innerText.trim().includes(kw) && isVisible(e) &&
-                ['A','BUTTON','LI','SPAN','DIV'].includes(e.tagName)
-            );
-            if (el) { el.click(); return el.innerText.trim(); }
-        }
-        return null;
-    }""")
-    if clicked:
-        ts(f"  已點擊分頁：「{clicked}」")
-        await page.wait_for_timeout(2_000)
-    else:
-        ts("  找不到排程分頁，嘗試從頁面直接搜尋連結...")
-
     article_id = ""
-    # 從所有 href 含文章 ID 的連結取最新一筆
+    
+    # 直接從重整後的列表中，過濾出文章 ID
     hrefs = await page.evaluate("""() => {
         return Array.from(document.querySelectorAll('a[href]'))
             .map(a => a.href)
-            .filter(h => h.includes('articleid=') || /\\/\\d{8,}/.test(h));
+            .filter(h => h.includes('articleid=') || /\\/article\\/\\d{8,}/.test(h) || /\\/post\\/\\d{8,}/.test(h));
     }""")
+    
     for href in hrefs:
         aid = _extract_id(href)
         if aid:
             article_id = aid
-            ts(f"  從連結取得文章 ID：{article_id}（href: {href[:80]}）")
+            ts(f"  成功從已排程列表取得文章 ID：{article_id}")
             break
 
     if not article_id:
-        # 標準 selector fallback
-        for sel in ['a[href*="articleid="]', 'a[href*="article"]', 'a[href*="/post/"]']:
-            try:
-                els = page.locator(sel)
-                cnt = await els.count()
-                if cnt > 0:
-                    href = await els.first.get_attribute("href") or ""
-                    article_id = _extract_id(href)
-                    if article_id:
-                        ts(f"  從 selector({sel}) 取得文章 ID：{article_id}")
-                        break
-            except Exception:
-                pass
-
-    if not article_id:
         ts("  無法自動取得排程文章 ID")
-        raise RuntimeError(f"無法自動取得排程文章 ID，請至 {CMONEY_USER_PAGE} → 已排程文章手動確認")
+        raise RuntimeError(f"無法自動取得排程文章 ID，請至 {scheduled_page_url} 手動確認")
 
     return article_id
 
