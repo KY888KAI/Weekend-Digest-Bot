@@ -961,10 +961,17 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
 
     async def _modal_appeared() -> bool:
         try:
-            return await page.locator('textarea[name="inputValue"]').first.is_visible(timeout=3000)
+            # 絕對判定法：直接找最外層的彈窗容器，只要它存在且有寬度，就是開啟了
+            return await page.evaluate("""() => {
+                const modal = document.querySelector('.dialog__content');
+                if (!modal) return false;
+                const r = modal.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            }""")
         except:
             return False
 
+    # 頁面載入後先關一次彈窗
     await _dismiss_popup()
 
     modal_opened = False
@@ -996,26 +1003,26 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         raise RuntimeError("點擊發文按鈕後 modal 未開啟，請確認是否已成功登入")
     await page.wait_for_timeout(1_500)
 
-    # ── 輸入標題 (強制擊碎玻璃罩) ──
+    # ── 輸入標題 (無敵 JS 聚焦法) ──
     ts(f"輸入標題：{title}")
-    title_el = page.locator('textarea[name="postTitle"]').first
-    
-    # 1. force=True 無視所有透明遮擋，強制點下去
-    await title_el.click(force=True, timeout=5000)
-    # 2. 雙重保險：用 JS 把游標硬塞進這個框框
-    await title_el.evaluate("el => el.focus()")
-    # 3. 模擬鍵盤打字
-    await page.keyboard.type(title, delay=50)
+    # 讓 JS 自己去找出畫面上「真正可見」的那個標題框，並把游標放進去
+    await page.evaluate("""() => {
+        const els = Array.from(document.querySelectorAll('textarea[name="postTitle"]'));
+        const visibleEl = els.find(el => el.getBoundingClientRect().width > 0);
+        if (visibleEl) visibleEl.focus();
+    }""")
+    await page.keyboard.type(title, delay=30)
     await page.wait_for_timeout(500)
 
-    # ── 輸入內文 (強制擊碎玻璃罩) ──
+    # ── 輸入內文 (無敵 JS 聚焦法) ──
     ts("輸入內文...")
-    body_el = page.locator('textarea[name="inputValue"]').first
-    
-    # 一樣無視遮擋強制點擊與 Focus
-    await body_el.click(force=True, timeout=5000)
-    await body_el.evaluate("el => el.focus()")
-    await page.keyboard.type(body, delay=20)
+    # 讓 JS 去找出真正可見的內文框，強制把游標放進去
+    await page.evaluate("""() => {
+        const els = Array.from(document.querySelectorAll('textarea[name="inputValue"]'));
+        const visibleEl = els.find(el => el.getBoundingClientRect().width > 0);
+        if (visibleEl) visibleEl.focus();
+    }""")
+    await page.keyboard.type(body, delay=10)
     await page.wait_for_timeout(500)
 
     # ── 發文模式選擇 ──────────────────────────────────────────
