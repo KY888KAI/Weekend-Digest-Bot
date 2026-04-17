@@ -1101,7 +1101,6 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
 
 async def _select_schedule_post(page: Page):
     ts("展開排程下拉選單...")
-    # 嘗試多種 selector 找下拉按鈕（class 或文字）
     dropdown_opened = await page.evaluate("""() => {
         const isVisible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
         const candidates = [
@@ -1118,7 +1117,7 @@ async def _select_schedule_post(page: Page):
         ts(f"  已點擊下拉按鈕：{dropdown_opened}")
     else:
         ts("  警告：找不到下拉按鈕，嘗試繼續...")
-    await page.wait_for_timeout(1500)  # 等下拉動畫完成
+    await page.wait_for_timeout(1500)
 
     ts("點擊排程發文選項...")
     schedule_clicked = False
@@ -1127,7 +1126,6 @@ async def _select_schedule_post(page: Page):
             const isVisible = el => {
                 const r = el.getBoundingClientRect();
                 if (r.width > 0 && r.height > 0) return true;
-                // 兼容 fixed/absolute 定位元素
                 let p = el.parentElement;
                 while (p && p !== document.documentElement) {
                     if (window.getComputedStyle(p).display === 'none') return false;
@@ -1136,17 +1134,9 @@ async def _select_schedule_post(page: Page):
                 return el.offsetParent !== null;
             };
             const all = Array.from(document.querySelectorAll('*'));
-            // 優先找葉節點（最精確的文字節點）
-            const exact = all.find(el =>
-                el.children.length === 0 &&
-                el.innerText && el.innerText.trim() === '排程發文' &&
-                isVisible(el)
-            );
+            const exact = all.find(el => el.children.length === 0 && el.innerText && el.innerText.trim() === '排程發文' && isVisible(el));
             if (exact) { exact.click(); return 'exact'; }
-            const loose = all.find(el =>
-                el.innerText && el.innerText.trim().includes('排程發文') &&
-                isVisible(el)
-            );
+            const loose = all.find(el => el.innerText && el.innerText.trim().includes('排程發文') && isVisible(el));
             if (loose) { loose.click(); return 'loose:' + loose.tagName; }
             return null;
         }""")
@@ -1154,39 +1144,26 @@ async def _select_schedule_post(page: Page):
             ts(f"  已點擊排程發文（{result}）")
             schedule_clicked = True
             break
-        ts(f"  排程發文選項未出現，重試 ({attempt+1}/4)...")
-        # 若下拉可能已關閉，再嘗試重新開啟
-        if attempt >= 1:
-            await page.evaluate("""() => {
-                const isVisible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-                const btn = Array.from(document.querySelectorAll('button, [role="button"]'))
-                    .find(el => el.innerText && el.innerText.trim().includes('立即發文') && isVisible(el));
-                if (btn) btn.click();
-            }""")
         await page.wait_for_timeout(1000)
 
     if not schedule_clicked:
         raise RuntimeError("找不到「排程發文」選項，請確認下拉選單是否已正確展開")
 
-    await page.wait_for_timeout(1200)
+    await page.wait_for_timeout(1500)
 
     future = datetime.now() + timedelta(days=6)
-    schedule_str = future.strftime("%Y-%m-%d 23:59")
+    schedule_str = future.strftime("%Y-%m-%d %H:%M")
     ts(f"  設定排程時間：{schedule_str}（6 天後，測試用不公開）")
 
     time_set = await page.evaluate(
         """(v) => {
-            // 優先用 flatpickr API
-            const fpInputs = document.querySelectorAll(
-                '#addScheduleDate, input[data-input="true"], input.schedulePost__datePicker, input[name="addScheduleDate"]'
-            );
+            const fpInputs = document.querySelectorAll('#addScheduleDate, input[data-input="true"], input.schedulePost__datePicker, input[name="addScheduleDate"]');
             for (const el of fpInputs) {
                 if (el._flatpickr) {
                     el._flatpickr.setDate(v, true);
                     return 'flatpickr-api';
                 }
             }
-            // fallback：直接塞值
             for (const el of fpInputs) {
                 if (el) {
                     el.removeAttribute('readonly');
@@ -1201,52 +1178,71 @@ async def _select_schedule_post(page: Page):
     )
     if time_set:
         ts(f"  排程時間設定完成（{time_set}）")
-    else:
-        ts("  警告：找不到 flatpickr 輸入欄位，嘗試繼續...")
+    await page.wait_for_timeout(1000)
 
-    await page.wait_for_timeout(800)
-
-    # 若日曆 picker 還在畫面上，嘗試關閉（按 Escape 或點確認）
+    # 關閉日曆
     calendar_visible = await page.evaluate("""() => {
         const cal = document.querySelector('.flatpickr-calendar.open, .flatpickr-calendar[class*="open"]');
         return cal !== null;
     }""")
     if calendar_visible:
-        ts("  日曆 picker 仍開啟，嘗試關閉...")
-        # 先嘗試點確認按鈕
-        closed = await page.evaluate("""() => {
-            const isVisible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-            const confirmBtns = Array.from(document.querySelectorAll('button, a'))
-                .filter(el => el.innerText && /確認|確定|關閉|OK/.test(el.innerText.trim()) && isVisible(el));
-            if (confirmBtns.length > 0) { confirmBtns[0].click(); return true; }
+        await page.keyboard.press("Escape")
+
+    # ------------------ 最新的綠色按鈕點擊邏輯 ------------------
+    ts("等待排程視窗重整按鈕狀態...")
+    await page.wait_for_timeout(1500) # 非常重要：給予 Vue 狀態更新與重新渲染綠色按鈕的時間！
+
+    # 策略 A：使用 Playwright 精準打擊 (尋找綠色主要按鈕或特定文字)
+    clicked = False
+    selectors = [
+        '.dialog__content button.cm-btn--primary',  # 彈窗內的綠色主要按鈕
+        'button.cm-btn--primary:has-text("發文")',   # 包含「發文」的綠色主要按鈕
+        '.messageModal__submit',                    # 發文專用的 class
+        'button:text-is("發文")'                    # 完全比對文字為「發文」的按鈕
+    ]
+
+    for sel in selectors:
+        try:
+            # 取畫面上最後一個符合的（通常就是最上層的彈窗按鈕）
+            btn = page.locator(sel).last
+            if await btn.count() > 0 and await btn.is_visible():
+                await btn.click(force=True)
+                ts(f"  已成功透過 Playwright 點擊發文 (規則: {sel})")
+                clicked = True
+                break
+        except Exception:
+            continue
+
+    # 策略 B：神級 JS 注入 (如果 Playwright 沒點到，作為最終防線強制點擊)
+    if not clicked:
+        ts("  警告：Playwright 點擊未成功，啟動 JS 強制尋找點擊...")
+        js_clicked = await page.evaluate("""() => {
+            const isVisible = el => el.getBoundingClientRect().width > 0;
+            // 擴大搜尋範圍，包含所有按鈕以及綠色樣式的元件
+            const candidates = Array.from(document.querySelectorAll('button, .cm-btn, [role="button"]'));
+            
+            // 倒著找，確保找到的是最上層彈窗的按鈕
+            const postBtn = candidates.reverse().find(el => {
+                if (!isVisible(el)) return false;
+                const txt = el.innerText ? el.innerText.trim() : '';
+                // 必須是「發文」，且絕對不能包含「排程」兩字 (避免點錯點回下拉選單)
+                return (txt === '發文' || txt === '確認') && !txt.includes('排程');
+            });
+            
+            if (postBtn) {
+                postBtn.click();
+                return true;
+            }
             return false;
         }""")
-        if not closed:
-            await page.keyboard.press("Escape")
-        await page.wait_for_timeout(600)
-
-    # 用 Playwright 真實 click（比 JS click 更可靠，能觸發 Vue/React 事件）
-    submit_clicked = False
-    try:
-        btn_loc = page.locator('button.messageModal__submit')
-        if await btn_loc.count() > 0:
-            await btn_loc.first.click(force=True)
-            submit_clicked = True
-            ts("  已點擊發文（排程）- Playwright")
-    except Exception as e:
-        ts(f"  Playwright click 失敗：{e}")
-
-    if not submit_clicked:
-        # fallback：JS 模擬完整 mouse event 序列
-        await page.evaluate("""() => {
-            const btn = document.querySelector('button.messageModal__submit');
-            if (btn) {
-                ['mousedown','mouseup','click'].forEach(evt =>
-                    btn.dispatchEvent(new MouseEvent(evt, {bubbles: true, cancelable: true}))
-                );
-            }
-        }""")
-        ts("  已點擊發文（排程）- JS MouseEvent")
+        
+        if js_clicked:
+            ts("  已成功透過 JS 強制點擊發文")
+        else:
+            raise RuntimeError("崩潰！無法在畫面上找到綠色的「發文」按鈕，發文失敗！請確認截圖畫面。")
+            
+    # 等待發文請求送出
+    await page.wait_for_timeout(2000)
 
 
 async def _wait_for_article_id_response(page: Page, timeout_s: int = 10) -> str:
