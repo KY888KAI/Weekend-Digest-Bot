@@ -996,25 +996,25 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         raise RuntimeError("點擊發文按鈕後 modal 未開啟，請確認是否已成功登入")
     await page.wait_for_timeout(1_500)
 
-    # ── 輸入標題 (強制模擬真人打字) ──
+    # ── 輸入標題 (強制擊碎玻璃罩) ──
     ts(f"輸入標題：{title}")
     title_el = page.locator('textarea[name="postTitle"]').first
-    if not await title_el.is_visible():
-        ts("  標題輸入框尚未展開，點擊底部「加標題」...")
-        try:
-            await page.locator('.modalAttach__text:has-text("加標題")').first.click(timeout=2000)
-            await page.wait_for_timeout(500)
-        except Exception as e:
-            ts(f"  展開標題失敗: {e}")
-
-    await title_el.click(timeout=5000)
+    
+    # 1. force=True 無視所有透明遮擋，強制點下去
+    await title_el.click(force=True, timeout=5000)
+    # 2. 雙重保險：用 JS 把游標硬塞進這個框框
+    await title_el.evaluate("el => el.focus()")
+    # 3. 模擬鍵盤打字
     await page.keyboard.type(title, delay=50)
     await page.wait_for_timeout(500)
 
-    # ── 輸入內文 (強制模擬真人打字) ──
+    # ── 輸入內文 (強制擊碎玻璃罩) ──
     ts("輸入內文...")
     body_el = page.locator('textarea[name="inputValue"]').first
-    await body_el.click(timeout=5000)
+    
+    # 一樣無視遮擋強制點擊與 Focus
+    await body_el.click(force=True, timeout=5000)
+    await body_el.evaluate("el => el.focus()")
     await page.keyboard.type(body, delay=20)
     await page.wait_for_timeout(500)
 
