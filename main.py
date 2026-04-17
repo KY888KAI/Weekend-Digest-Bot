@@ -961,7 +961,6 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
 
     async def _modal_appeared() -> bool:
         try:
-            # 絕對判定法：直接找最底下的「發文」大按鈕，只要它出現，彈窗絕對是準備好了
             return await page.evaluate("""() => {
                 const btn = document.querySelector('button.messageModal__submit');
                 if (!btn) return false;
@@ -990,7 +989,7 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
                 await page.wait_for_timeout(1_000)
             if await _modal_appeared():
                 modal_opened = True
-                ts("  發文 modal 已开启")
+                ts("  發文 modal 已開啟")
                 break
 
         if modal_opened:
@@ -1002,20 +1001,33 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         raise RuntimeError("點擊發文按鈕後 modal 未開啟，請確認是否已成功登入")
     await page.wait_for_timeout(1_500)
 
-    # ── 輸入標題 (精準可見元件定位法) ──
+    # ── 輸入標題 (終極神級 JS 注入法) ──
     ts(f"輸入標題：{title}")
-    # 使用 :visible 偽類，過濾掉所有隱藏的手機版或殘留元件，只抓畫面上真正顯示的那一個
-    title_box = page.locator('textarea[name="postTitle"]:visible').first
-    await title_box.fill(title, timeout=5000)
+    await page.evaluate("""(text) => {
+        const els = Array.from(document.querySelectorAll('textarea[name="postTitle"]'));
+        const el = els.find(e => e.getBoundingClientRect().width > 0);
+        if (el) {
+            el.value = text;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }""", title)
     await page.wait_for_timeout(500)
 
-    # ── 輸入內文 (精準可見元件定位法) ──
+    # ── 輸入內文 (終極神級 JS 注入法) ──
     ts("輸入內文...")
-    body_box = page.locator('textarea[name="inputValue"]:visible').first
-    await body_box.fill(body, timeout=5000)
+    await page.evaluate("""(text) => {
+        const els = Array.from(document.querySelectorAll('textarea[name="inputValue"]'));
+        const el = els.find(e => e.getBoundingClientRect().width > 0);
+        if (el) {
+            el.value = text;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }""", body)
     await page.wait_for_timeout(500)
 
-    # ── 發文模式選擇 ──────────────────────────────────────────
+    # ── 發文模式選擇 (全面改用 JS 無視阻擋) ──────────────────────────
     if test_mode:
         ts("【測試】點擊「立即發文」下拉 → 選擇「排程發文」...")
         await _select_schedule_post(page)
@@ -1026,9 +1038,10 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         article_id = await _get_scheduled_article_id(page)
     else:
         ts("點擊底部「發文」送出...")
-        # 嚴格綁死 modal 內部的發文按鈕
-        submit_btn = page.locator('.messageModal__submit').first
-        await submit_btn.click(timeout=5000)
+        await page.evaluate("""() => {
+            const btn = document.querySelector('button.messageModal__submit');
+            if (btn) btn.click();
+        }""")
         ts("  已點擊發文")
 
         ts("等待發文完成...")
@@ -1058,13 +1071,21 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
 
 async def _select_schedule_post(page: Page):
     ts("展開排程下拉選單...")
-    dropdown_btn = page.locator('.cm-dropdown__btn').first
-    await dropdown_btn.click(timeout=5000)
+    await page.evaluate("""() => {
+        const btn = document.querySelector('.cm-dropdown__btn');
+        if (btn) btn.click();
+    }""")
     await page.wait_for_timeout(1000)
 
     ts("點擊排程發文選項...")
-    schedule_opt = page.locator('text="排程發文"').last
-    await schedule_opt.click(timeout=5000)
+    await page.evaluate("""() => {
+        const isVisible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+        const all = Array.from(document.querySelectorAll('*'));
+        const exact = all.find(el => el.children.length === 0 && el.innerText && el.innerText.trim() === '排程發文' && isVisible(el));
+        if (exact) { exact.click(); return; }
+        const loose = all.find(el => el.innerText && el.innerText.trim().includes('排程發文') && isVisible(el));
+        if (loose) loose.click();
+    }""")
     await page.wait_for_timeout(1000)
 
     future = datetime.now() + timedelta(days=6)
@@ -1095,9 +1116,10 @@ async def _select_schedule_post(page: Page):
 
     await page.wait_for_timeout(800)
 
-    # 嚴格綁死 modal 內部的排程送出按鈕
-    submit_btn = page.locator('.messageModal__submit').first
-    await submit_btn.click(timeout=5000)
+    await page.evaluate("""() => {
+        const btn = document.querySelector('button.messageModal__submit');
+        if (btn) btn.click();
+    }""")
     ts("  已點擊發文（排程）")
 
 
@@ -1190,7 +1212,7 @@ async def stage3_push(ctx: BrowserContext, push_content: str, deeplink: str):
         await page.goto(PUSH_URL, wait_until="domcontentloaded", timeout=60_000)
         await page.wait_for_timeout(3_000)
     else:
-        ts("  推播後台 cookie 有有效，已略過登入")
+        ts("  推播後台 cookie 有效，已略過登入")
 
     today = datetime.now().strftime("%Y-%m-%d")
     push_datetime = f"{today}T{PUSH_TIME_STR}"
