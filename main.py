@@ -814,6 +814,66 @@ def _clean_push_text(raw: str) -> str:
 # ═══════════════════════════════════════════════════════════
 CMONEY_USER_PAGE = "https://www.cmoney.tw/forum/user/10331995"
 
+async def _close_annoying_modals(page: Page):
+    """
+    自動偵測並關閉畫面上可能遮擋操作的廣告或系統彈窗
+    """
+    ts("正在檢查是否有干擾彈窗...")
+    
+    close_selectors = [
+        '.cm-modal__close', 
+        '.dialog__close',
+        '.modal-close-btn',
+        '.ad-banner__close',
+        'button[aria-label="Close"]',
+        'button[aria-label="關閉"]',
+        'svg.cm-blackbar__sidebarClose path',
+        '.el-overlay' 
+    ]
+    
+    closed_any = False
+    for sel in close_selectors:
+        try:
+            elements = page.locator(sel)
+            count = await elements.count()
+            if count > 0:
+                for i in range(count):
+                    el = elements.nth(i)
+                    if await el.is_visible(timeout=500):
+                        await el.click(force=True)
+                        ts(f"  已自動關閉彈窗 (透過選擇器: {sel})")
+                        closed_any = True
+                        await page.wait_for_timeout(500)
+        except Exception:
+            continue
+            
+    if not closed_any:
+        try:
+             js_closed = await page.evaluate("""() => {
+                const isVisible = el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
+                const candidates = Array.from(document.querySelectorAll('button, a, .close, [class*="close"]'));
+                const closeBtn = candidates.find(el => {
+                    if (!isVisible(el)) return false;
+                    const txt = el.innerText ? el.innerText.trim().toLowerCase() : '';
+                    return txt === 'x' || txt === '✕' || txt === '關閉' || txt === 'close';
+                });
+                if (closeBtn) {
+                    closeBtn.click();
+                    return true;
+                }
+                return false;
+             }""")
+             if js_closed:
+                 ts("  已透過 JS 啟發式搜尋自動關閉彈窗")
+                 closed_any = True
+                 await page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+    if not closed_any:
+        ts("  目前畫面無明顯干擾彈窗。")
+
+
 async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: bool = False) -> str:
     mode_label = "【排程發文-測試】" if test_mode else "【立即發文】"
     ts(f"─── 第二階段：CMoney 同學會發文 開始 {mode_label} ───")
@@ -901,6 +961,9 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
     await page.goto(CMONEY_CLUB, wait_until="domcontentloaded", timeout=60_000)
     await page.wait_for_timeout(3_000)
 
+    # ---------- 在準備發文操作前，先呼叫關閉彈窗機制 ----------
+    await _close_annoying_modals(page)
+
     dismiss_sels = [
         'button:has-text("下次再說")',
         'button:has-text("稍後再說")',
@@ -913,7 +976,7 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
             el = page.locator(sel).first
             if await el.count() > 0 and await el.is_visible():
                 await el.click()
-                ts(f"  已關閉彈窗 ({sel})")
+                ts(f"  已關閉常規彈窗 ({sel})")
                 await page.wait_for_timeout(1_000)
                 break
         except Exception:
@@ -927,21 +990,18 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
             const candidates = Array.from(document.querySelectorAll('a, button, [role="button"]'));
             const btn = candidates.find(el => {
                 if (!el.innerText || el.innerText.trim() !== '發文') return false;
-                // 排除 modal 內的元素（class 含 messageModal 或 dialog）
+                // 排除 modal 內的元素
                 if (dialog && dialog.contains(el)) return false;
                 if (el.className && (el.className.includes('messageModal') || el.className.includes('modalAction'))) return false;
                 const r = el.getBoundingClientRect();
                 return r.width > 0 && r.height > 0;
             });
             if (btn) { btn.click(); return btn.tagName + ' ' + btn.className.slice(0, 50); }
-            // 找不到時印出所有「發文」元素供診斷
-            const all = candidates.filter(el => el.innerText && el.innerText.trim().includes('發文'));
-            return '✗ all=' + JSON.stringify(all.map(el => el.className.slice(0,30)));
+            return null;
         }""")
-        if result and not str(result).startswith('✗'):
+        if result:
             ts(f"  已點擊發文按鈕：{result}")
             return True
-        ts(f"  [診斷] 發文按鈕搜尋結果：{result}")
         return False
 
     async def _dismiss_popup() -> bool:
@@ -965,20 +1025,17 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         return False
 
     async def _modal_appeared() -> bool:
-        """DOM 中有多個 messageModal 實例，必須用 querySelectorAll 找全部，任一可見就算開啟"""
         try:
             return await page.evaluate("""() => {
                 const isElVisible = el => {
-                    // 方法1：bounding rect 非零
                     const r = el.getBoundingClientRect();
                     if (r.width > 0 && r.height > 0) return true;
-                    // 方法2：往上找祖先，確認沒有 display:none（兼容 fixed 元素 rect=0 的情況）
                     let p = el.parentElement;
                     while (p && p !== document.documentElement) {
                         if (window.getComputedStyle(p).display === 'none') return false;
                         p = p.parentElement;
                     }
-                    return true; // 沒有 display:none 祖先 → 可見
+                    return true;
                 };
                 const sels = [
                     'button.messageModal__submit',
@@ -986,14 +1043,12 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
                     'textarea[name="inputValue"]',
                 ];
                 for (const sel of sels) {
-                    // 取全部（可能多個 modal 實例同時在 DOM）
                     const els = Array.from(document.querySelectorAll(sel));
                     if (els.some(isElVisible)) return true;
                 }
                 return false;
             }""")
-        except Exception as e:
-            ts(f"  [modal診斷錯誤] {e}")
+        except Exception:
             return False
 
     await _dismiss_popup()
@@ -1053,13 +1108,12 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
     }""", body)
     await page.wait_for_timeout(500)
 
-    # ── 發文模式選擇 (全面改用 JS 無視阻擋) ──────────────────────────
+    # ── 發文模式選擇 ──────────────────────────
     if test_mode:
         ts("【測試】點擊「立即發文」下拉 → 選擇「排程發文」...")
         await _select_schedule_post(page)
 
         ts("等待排程發文完成...")
-        # 嘗試從頁面回應取得 article ID（最快方式）
         article_id = await _wait_for_article_id_response(page, timeout_s=10)
         if article_id:
             ts(f"  從 API 回應取得文章 ID：{article_id}")
@@ -1192,18 +1246,16 @@ async def _select_schedule_post(page: Page):
     ts("等待排程視窗重整按鈕狀態...")
     await page.wait_for_timeout(1500) # 非常重要：給予 Vue 狀態更新與重新渲染綠色按鈕的時間！
 
-    # 策略 A：使用 Playwright 精準打擊 (尋找綠色主要按鈕或特定文字)
     clicked = False
     selectors = [
-        '.dialog__content button.cm-btn--primary',  # 彈窗內的綠色主要按鈕
-        'button.cm-btn--primary:has-text("發文")',   # 包含「發文」的綠色主要按鈕
-        '.messageModal__submit',                    # 發文專用的 class
-        'button:text-is("發文")'                    # 完全比對文字為「發文」的按鈕
+        '.dialog__content button.cm-btn--primary',  
+        'button.cm-btn--primary:has-text("發文")',   
+        '.messageModal__submit',                    
+        'button:text-is("發文")'                    
     ]
 
     for sel in selectors:
         try:
-            # 取畫面上最後一個符合的（通常就是最上層的彈窗按鈕）
             btn = page.locator(sel).last
             if await btn.count() > 0 and await btn.is_visible():
                 await btn.click(force=True)
@@ -1213,19 +1265,15 @@ async def _select_schedule_post(page: Page):
         except Exception:
             continue
 
-    # 策略 B：神級 JS 注入 (如果 Playwright 沒點到，作為最終防線強制點擊)
     if not clicked:
         ts("  警告：Playwright 點擊未成功，啟動 JS 強制尋找點擊...")
         js_clicked = await page.evaluate("""() => {
             const isVisible = el => el.getBoundingClientRect().width > 0;
-            // 擴大搜尋範圍，包含所有按鈕以及綠色樣式的元件
             const candidates = Array.from(document.querySelectorAll('button, .cm-btn, [role="button"]'));
             
-            // 倒著找，確保找到的是最上層彈窗的按鈕
             const postBtn = candidates.reverse().find(el => {
                 if (!isVisible(el)) return false;
                 const txt = el.innerText ? el.innerText.trim() : '';
-                // 必須是「發文」，且絕對不能包含「排程」兩字 (避免點錯點回下拉選單)
                 return (txt === '發文' || txt === '確認') && !txt.includes('排程');
             });
             
@@ -1253,7 +1301,6 @@ async def _wait_for_article_id_response(page: Page, timeout_s: int = 10) -> str:
     async def on_response(response):
         try:
             url = response.url
-            # 只關注可能含文章 ID 的 API
             if not any(kw in url for kw in ["forum", "post", "article", "schedule", "community"]):
                 return
             if response.status not in (200, 201):
@@ -1263,7 +1310,6 @@ async def _wait_for_article_id_response(page: Page, timeout_s: int = 10) -> str:
                 return
             body = await response.body()
             data = _json.loads(body)
-            # 遞迴找任何像 articleId / id 的數字欄位
             def find_id(obj, depth=0):
                 if depth > 5:
                     return None
@@ -1379,7 +1425,7 @@ async def stage3_push(ctx: BrowserContext, push_content: str, deeplink: str):
         await page.goto(PUSH_URL, wait_until="domcontentloaded", timeout=60_000)
         await page.wait_for_timeout(3_000)
     else:
-        ts("  推播後台 cookie 有效，已略過登入")
+        ts("  推播後台 cookie 有有效，已略過登入")
 
     today = datetime.now().strftime("%Y-%m-%d")
     push_datetime = f"{today}T{PUSH_TIME_STR}"
