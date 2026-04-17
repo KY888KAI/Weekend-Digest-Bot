@@ -1004,28 +1004,21 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         raise RuntimeError("點擊發文按鈕後 modal 未開啟，請確認是否已成功登入")
     await page.wait_for_timeout(1_500)
 
-    # ── 輸入標題 (強制擊碎玻璃罩) ──
+    # ── 輸入標題 (人類視覺定位法) ──
     ts(f"輸入標題：{title}")
-    # 利用 JS 直接找出正確的可見輸入框並聚焦
-    await page.evaluate("""() => {
-        const els = Array.from(document.querySelectorAll('textarea[name="postTitle"]'));
-        const visibleEl = els.find(el => el.getBoundingClientRect().width > 0);
-        if (visibleEl) visibleEl.focus();
-    }""")
-    await page.keyboard.type(title, delay=30)
+    # 放棄找底層標籤，直接找畫面上寫著「加上標題」的浮水印框框
+    title_box = page.get_by_placeholder("加上標題").first
+    await title_box.click(timeout=5000)
+    await page.keyboard.type(title, delay=50)
     await page.wait_for_timeout(500)
 
-    # ── 輸入內文 (強制擊碎玻璃罩) ──
+    # ── 輸入內文 (人類視覺定位法) ──
     ts("輸入內文...")
-    # 讓 JS 去找出真正可見的內文框，強制把游標放進去
-    await page.evaluate("""() => {
-        const els = Array.from(document.querySelectorAll('textarea[name="inputValue"]'));
-        const visibleEl = els.find(el => el.getBoundingClientRect().width > 0);
-        if (visibleEl) visibleEl.focus();
-    }""")
-    await page.keyboard.type(body, delay=10)
+    # 直接找畫面上寫著「來聊聊股市話題」的浮水印框框
+    body_box = page.get_by_placeholder("來聊聊股市話題").first
+    await body_box.click(timeout=5000)
+    await page.keyboard.type(body, delay=20)
     await page.wait_for_timeout(500)
-
     # ── 發文模式選擇 ──────────────────────────────────────────
     if test_mode:
         ts("【測試】點擊「立即發文」下拉 → 選擇「排程發文」...")
