@@ -67,6 +67,8 @@ GEMINI_PROMPT_1_HOLIDAY = (
     "根據以上確認數據，統整連假期間的重點事件與市場情緒，以下面格式範例整理，"
 )
 # 共用的後半段 prompt
+# {publish_date}：發文當天日期，格式 YYYY/M/D
+# {week_ref}：週日模式="下週"，連假模式="本週"
 GEMINI_PROMPT_1_TEMPLATE = (
     "{intro}"
     "【發文日期】今天是 {publish_date}，文章標題首句日期請使用此日期。\n"
@@ -961,17 +963,16 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
 
     async def _modal_appeared() -> bool:
         try:
-            # 絕對判定法：直接找最外層的彈窗容器，只要它存在且有寬度，就是開啟了
+            # 絕對判定法：直接找最底下的「發文」大按鈕，只要它出現，彈窗絕對是準備好了
             return await page.evaluate("""() => {
-                const modal = document.querySelector('.dialog__content');
-                if (!modal) return false;
-                const r = modal.getBoundingClientRect();
+                const btn = document.querySelector('button.messageModal__submit');
+                if (!btn) return false;
+                const r = btn.getBoundingClientRect();
                 return r.width > 0 && r.height > 0;
             }""")
         except:
             return False
 
-    # 頁面載入後先關一次彈窗
     await _dismiss_popup()
 
     modal_opened = False
@@ -1003,9 +1004,9 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         raise RuntimeError("點擊發文按鈕後 modal 未開啟，請確認是否已成功登入")
     await page.wait_for_timeout(1_500)
 
-    # ── 輸入標題 (無敵 JS 聚焦法) ──
+    # ── 輸入標題 (強制擊碎玻璃罩) ──
     ts(f"輸入標題：{title}")
-    # 讓 JS 自己去找出畫面上「真正可見」的那個標題框，並把游標放進去
+    # 利用 JS 直接找出正確的可見輸入框並聚焦
     await page.evaluate("""() => {
         const els = Array.from(document.querySelectorAll('textarea[name="postTitle"]'));
         const visibleEl = els.find(el => el.getBoundingClientRect().width > 0);
@@ -1014,7 +1015,7 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
     await page.keyboard.type(title, delay=30)
     await page.wait_for_timeout(500)
 
-    # ── 輸入內文 (無敵 JS 聚焦法) ──
+    # ── 輸入內文 (強制擊碎玻璃罩) ──
     ts("輸入內文...")
     # 讓 JS 去找出真正可見的內文框，強制把游標放進去
     await page.evaluate("""() => {
