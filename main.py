@@ -1298,52 +1298,50 @@ async def _select_schedule_post(page: Page) -> str:
 
     await page.wait_for_timeout(1500)
     
-# ─── 步驟 3：設定排程時間 (3天後絕對安全版) ────────────────────
+# ─── 步驟 3：設定「3 天後 10:00」的安全測試時間 ────────────────────
     now = datetime.now()
-    # 設為 3 天後，確保絕對在 5 分鐘後且 7 天內，且格式對齊
+    # 設定為 3 天後，確保絕對在 5 分鐘後且 7 天內
     future = (now + timedelta(days=3)).replace(hour=10, minute=0, second=0, microsecond=0)
     future_ms = int(future.timestamp() * 1000)
     schedule_str = future.strftime("%Y-%m-%d %H:%M")
     
-    ts(f"  [測試設定] 排程時間：{schedule_str}")
+    ts(f"  [測試設定] 準備設定排程時間：{schedule_str}")
 
     state_diag = await page.evaluate("""(args) => {
         const { ms, fmt } = args;
         const d = new Date(ms);
         
-        // 1. 同步 Flatpickr 與觸發事件
+        // 1. 同步 Flatpickr 插件並觸發變更事件
         const fpInput = document.querySelector('#addScheduleDate, input.schedulePost__datePicker');
         if (fpInput && fpInput._flatpickr) {
-            fpInput._flatpickr.setDate(d, true); // true 會觸發 onChange
-        } else if (fpInput) {
-            fpInput.value = fmt;
-            fpInput.dispatchEvent(new Event('input', { bubbles: true }));
+            fpInput._flatpickr.setDate(d, true); // true 會觸發插件的 onChange
         }
 
-        // 2. 暴力同步 Vue 狀態
-        let vueSet = false;
+        // 2. 暴力同步 Vue State (父子層同時更新)
+        let vueSynced = false;
         document.querySelectorAll('*').forEach(el => {
             const v = el.__vue__;
             if (v && v.$data) {
+                // 父層：儲存毫秒數字
                 if ('isSchedulePost' in v.$data) {
                     v.$data.isSchedulePost = true;
                     v.$data.scheduledPostDate = ms;
-                    vueSet = true;
+                    vueSynced = true;
                 }
-                if ('scheduledPostDate' in v.$data) {
-                    v.$data.scheduledPostDate = (typeof v.$data.scheduledPostDate === 'string') ? fmt : ms;
+                // 子層：儲存格式化字串
+                if ('scheduledPostDate' in v.$data && typeof v.$data.scheduledPostDate === 'string') {
+                    v.$data.scheduledPostDate = fmt;
                     if ('isLegalTime' in v.$data) v.$data.isLegalTime = true;
                     if ('isValidate' in v.$data) v.$data.isValidate = true;
                 }
             }
         });
-        return { vueSet, timeSent: fmt };
+        return { vueSynced, timeSent: fmt };
     }""", {"ms": future_ms, "fmt": schedule_str})
     
-    ts(f"  [Vue State] 同步結果: {state_diag}")
-    await page.wait_for_timeout(1000)
-
-    # 關閉日曆
+    ts(f"  [Vue State] 注入結果: {state_diag}")
+    
+    # 模擬人類點擊空白處，關閉日曆面板
     await page.evaluate("() => { const c = document.querySelector('.flatpickr-calendar.open'); if(c) document.body.click(); }")
     await page.wait_for_timeout(1000)
 
@@ -1451,48 +1449,41 @@ async def _select_schedule_post(page: Page) -> str:
     ts(f"  已點擊按鈕：{clicked[:80]}")
 
 # ─── 步驟 7：處理「標記個股」與「只有叉叉」的干擾彈窗 ─────────────────────
-    ts("  [防呆機制] 等待並排除標記個股與干擾彈窗...")
+    ts("  [防呆機制] 啟動監測：等待並排除標記個股彈窗...")
     
-    # 關鍵修正：不要馬上放棄！每 0.5 秒檢查一次，最多等 5 秒 (10次)
-    # 這就是模擬人類「等彈窗跳出來」的動作
+    # 模擬人類：每 0.5 秒檢查一次，最多等 5 秒 (10次)
+    handled_any = False
     for attempt in range(10):
         handled = await page.evaluate("""() => {
-            const CONFIRM = ['全部標記','標記','確認','確定','繼續','同意'];
-            const DISMISS = ['我知道了','知道了','關閉','好的','OK'];
-            
             const isVis = el => {
                 const r = el.getBoundingClientRect();
                 const s = window.getComputedStyle(el);
                 return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
             };
             
-            const btns = Array.from(document.querySelectorAll('button, [role="button"], .cm-btn, .dialog__closeBtn'));
+            // 找尋所有按鈕，包括你發現的那個「aria-label="Close"」的叉叉按鈕
+            const allBtns = Array.from(document.querySelectorAll('button, [role="button"], .cm-btn, .dialog__closeBtn'));
             
-            // 1. 優先處理「只有叉叉」的按鈕
-            const xBtn = btns.find(b => isVis(b) && (b.classList.contains('dialog__closeBtn') || b.getAttribute('aria-label') === 'Close'));
+            // 1. 優先處理叉叉按鈕 (X)
+            const xBtn = allBtns.find(b => isVis(b) && (b.classList.contains('dialog__closeBtn') || b.getAttribute('aria-label') === 'Close'));
             if (xBtn) { xBtn.click(); return 'X_Close_Button'; }
 
-            // 2. 處理有文字的確認按鈕
-            for (const txt of CONFIRM) {
-                const b = btns.find(b => isVis(b) && b.innerText && b.innerText.trim().includes(txt));
-                if (b) { b.click(); return 'confirm:' + txt; }
-            }
-            
-            // 3. 處理有文字的關閉按鈕
-            for (const txt of DISMISS) {
-                const b = btns.find(b => isVis(b) && b.innerText && b.innerText.trim().includes(txt));
-                if (b) { b.click(); return 'dismiss:' + txt; }
+            // 2. 處理「標記」、「確認」等字眼
+            const CONFIRM_TEXTS = ['全部標記', '標記', '確認', '確定', '繼續', '同意'];
+            for (const txt of CONFIRM_TEXTS) {
+                const b = allBtns.find(btn => isVis(btn) && btn.innerText && btn.innerText.trim().includes(txt));
+                if (b) { b.click(); return 'Text_Button:' + txt; }
             }
             return null;
         }""")
         
         if handled:
             ts(f"  已自動清除障礙：{handled}")
-            await page.wait_for_timeout(1500) # 點完後給系統時間反應
-            break # 處理完畢，跳出迴圈去等 API
+            handled_any = True
+            await page.wait_for_timeout(1500) # 給系統時間重送發文請求
+            # 這裡不 break，繼續跑完迴圈看有沒有第二個彈窗
         else:
-            # 沒找到？沒關係，等 0.5 秒再找一次！
-            await page.wait_for_timeout(500)
+            await page.wait_for_timeout(500) # 沒看到彈窗就再等半秒
             
     await _save_debug_snapshot(page, "after_submit_click")
 
