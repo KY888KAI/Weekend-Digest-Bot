@@ -1315,6 +1315,7 @@ async def _select_schedule_post(page: Page) -> str:
         const fpInput = document.querySelector('#addScheduleDate, input.schedulePost__datePicker');
         if (fpInput && fpInput._flatpickr) {
             fpInput._flatpickr.setDate(d, true); // true 會觸發插件的 onChange
+            fpInput._flatpickr.close(); // 安全關閉日曆，絕對不要去點 body！
         }
 
         // 2. 暴力同步 Vue State (父子層同時更新)
@@ -1322,13 +1323,11 @@ async def _select_schedule_post(page: Page) -> str:
         document.querySelectorAll('*').forEach(el => {
             const v = el.__vue__;
             if (v && v.$data) {
-                // 父層：儲存毫秒數字
                 if ('isSchedulePost' in v.$data) {
                     v.$data.isSchedulePost = true;
                     v.$data.scheduledPostDate = ms;
                     vueSynced = true;
                 }
-                // 子層：儲存格式化字串
                 if ('scheduledPostDate' in v.$data && typeof v.$data.scheduledPostDate === 'string') {
                     v.$data.scheduledPostDate = fmt;
                     if ('isLegalTime' in v.$data) v.$data.isLegalTime = true;
@@ -1340,9 +1339,6 @@ async def _select_schedule_post(page: Page) -> str:
     }""", {"ms": future_ms, "fmt": schedule_str})
     
     ts(f"  [Vue State] 注入結果: {state_diag}")
-    
-    # 模擬人類點擊空白處，關閉日曆面板
-    await page.evaluate("() => { const c = document.querySelector('.flatpickr-calendar.open'); if(c) document.body.click(); }")
     await page.wait_for_timeout(1000)
 
     # ─── 步驟 4：等發文按鈕就緒（去除 --disable class）──────────
@@ -1449,7 +1445,7 @@ async def _select_schedule_post(page: Page) -> str:
     ts(f"  已點擊按鈕：{clicked[:80]}")
 
 # ─── 步驟 7：處理「標記個股」與「只有叉叉」的干擾彈窗 ─────────────────────
-    ts("  [防呆機制] 啟動監測：等待並排除標記個股彈窗...")
+    ts("  [防呆機制] 啟動監測：等待並排除標記個股與退出編輯彈窗...")
     
     # 模擬人類：每 0.5 秒檢查一次，最多等 5 秒 (10次)
     handled_any = False
@@ -1461,9 +1457,12 @@ async def _select_schedule_post(page: Page) -> str:
                 return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
             };
             
-            // 找尋所有按鈕，包括你發現的那個「aria-label="Close"」的叉叉按鈕
             const allBtns = Array.from(document.querySelectorAll('button, [role="button"], .cm-btn, .dialog__closeBtn'));
             
+            // 0. 針對你抓到的「退出編輯」警告，必須點擊「繼續編輯」！
+            const continueBtn = allBtns.find(b => isVis(b) && b.innerText && b.innerText.trim() === '繼續編輯');
+            if (continueBtn) { continueBtn.click(); return '繼續編輯'; }
+
             // 1. 優先處理叉叉按鈕 (X)
             const xBtn = allBtns.find(b => isVis(b) && (b.classList.contains('dialog__closeBtn') || b.getAttribute('aria-label') === 'Close'));
             if (xBtn) { xBtn.click(); return 'X_Close_Button'; }
@@ -1481,7 +1480,6 @@ async def _select_schedule_post(page: Page) -> str:
             ts(f"  已自動清除障礙：{handled}")
             handled_any = True
             await page.wait_for_timeout(1500) # 給系統時間重送發文請求
-            # 這裡不 break，繼續跑完迴圈看有沒有第二個彈窗
         else:
             await page.wait_for_timeout(500) # 沒看到彈窗就再等半秒
             
