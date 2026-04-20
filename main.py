@@ -1298,100 +1298,53 @@ async def _select_schedule_post(page: Page) -> str:
 
     await page.wait_for_timeout(1500)
     
-    # ─── 步驟 3：設定排程時間 + 注入 Vue state ────────────────────
-    future = datetime.now() + timedelta(days=2)
+# ─── 步驟 3：設定排程時間 (精準同步版) ────────────────────
+    # 使用本地時間並往後推 1 小時，絕對符合「5分鐘後到7日內」的規範
+    now = datetime.now()
+    future = now + timedelta(hours=1)
+    
+    # 確保是整數毫秒
     future_ms = int(future.timestamp() * 1000)
-    ts(f"  設定排程時間：{future.strftime('%Y-%m-%d %H:%M')}（2 天後）")
+    # 格式必須是 YYYY-MM-DD HH:mm
+    schedule_str = future.strftime("%Y-%m-%d %H:%M")
+    
+    ts(f"  [INFO] 嘗試設定排程時間為：{schedule_str}")
 
-    state_diag = await page.evaluate("""(ms) => {
+    state_diag = await page.evaluate("""(args) => {
+        const { ms, fmt } = args;
         const d = new Date(ms);
-        const pad = n => String(n).padStart(2, '0');
-        const fmt = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate())
-                  + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-
-        // ── flatpickr ──
+        
+        // 1. 同步 Flatpickr 套件
         let fpSet = false;
-        for (const el of document.querySelectorAll(
-            '#addScheduleDate, input[data-input="true"], input.schedulePost__datePicker'
-        )) {
-            if (!el._flatpickr) continue;
-            const fp = el._flatpickr;
-            fp.setDate(d, false);
-            const dateStr = fp.formatDate(d, fp.config.dateFormat);
-            for (const fn of (fp.config.onChange || [])) try { fn([d], dateStr, fp); } catch(e) {}
-            for (const fn of (fp.config.onClose  || [])) try { fn([d], dateStr, fp); } catch(e) {}
-            el.value = fmt;
-            el.dispatchEvent(new Event('input',  { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
+        const fpInput = document.querySelector('#addScheduleDate, input.schedulePost__datePicker');
+        if (fpInput && fpInput._flatpickr) {
+            fpInput._flatpickr.setDate(d, true);
             fpSet = true;
-            // 找 schedulePost 子元件，設 string 格式 + isLegalTime=true
-            let node = el.parentElement;
-            while (node && node !== document.body) {
-                const v = node.__vue__;
-                if (v && v.$data && 'scheduledPostDate' in v.$data) {
-                    v.$data.scheduledPostDate = fmt;   // 子元件用字串
-                    if ('isLegalTime' in v.$data) {
-                        v.$data.isLegalTime = true;
-                        if (v._computedWatchers && v._computedWatchers.isLegalTime) {
-                            v._computedWatchers.isLegalTime.dirty = false;
-                            v._computedWatchers.isLegalTime.value = true;
-                        }
-                        try { Object.defineProperty(v, 'isLegalTime', { get: () => true, configurable: true }); } catch(e) {}
-                    }
-                    break;
-                }
-                node = node.parentElement;
-            }
-            break;
         }
 
-        // ── messageModal 父元件：scheduledPostDate 用 ms 數字 ──
-        let parentSet = false;
-        let apiDiag   = 'n/a';
-        const seen = new WeakSet();
-        for (const el of document.querySelectorAll('*')) {
+        // 2. 注入 Vue 核心狀態 (關鍵：必須同時更新父層與子層)
+        let vueSet = false;
+        const allElements = document.querySelectorAll('*');
+        for (const el of allElements) {
             const v = el.__vue__;
-            if (!v || seen.has(v)) continue;
-            seen.add(v);
-            if (!v.$data || !('isSchedulePost' in v.$data)) continue;
-
-            v.$data.isSchedulePost    = true;
-            v.$data.scheduledPostDate = ms;    // 父元件必須是 ms 數字
-
-            // 確保 $refs.schedulePost 有資料
-            if (!v.$refs) v.$refs = {};
-            const ref = v.$refs.schedulePost;
-            if (ref) {
-                ref.scheduledPostDate = fmt;
-                try { Object.defineProperty(ref, 'isLegalTime', { get: () => true, configurable: true }); } catch(e) {}
-            } else {
-                v.$refs.schedulePost = { scheduledPostDate: fmt, isLegalTime: true,
-                                          baseOfLegalTime: new Date().toISOString() };
-            }
-
-            // 診斷：buildSubmitApiData 現在回傳什麼？
-            if (typeof v.buildSubmitApiData === 'function') {
-                try {
-                    const r = v.buildSubmitApiData.call(v);
-                    apiDiag = (r == null) ? 'NULL' : JSON.stringify(r).slice(0, 300);
-                } catch(e) { apiDiag = 'err:' + e.message; }
-            }
-            parentSet = true;
-            break;
-        }
-
-        return JSON.stringify({ fpSet, parentSet, apiDiag,
-            parentDateType: (() => {
-                for (const el of document.querySelectorAll('*')) {
-                    const v = el.__vue__;
-                    if (v && v.$data && 'isSchedulePost' in v.$data)
-                        return typeof v.$data.scheduledPostDate;
+            if (v && v.$data) {
+                // 更新父層 Modal 狀態
+                if ('isSchedulePost' in v.$data) {
+                    v.$data.isSchedulePost = true;
+                    v.$data.scheduledPostDate = ms; // 父層通常收毫秒數字
+                    vueSet = true;
                 }
-                return 'not-found';
-            })()
-        });
-    }""", future_ms)
-    ts(f"  [Vue state] {state_diag}")
+                // 更新子層時間選擇器狀態
+                if ('scheduledPostDate' in v.$data && typeof v.$data.scheduledPostDate === 'string') {
+                    v.$data.scheduledPostDate = fmt; // 子層通常收字串
+                    if ('isLegalTime' in v.$data) v.$data.isLegalTime = true;
+                }
+            }
+        }
+        return { fpSet, vueSet, timeSent: fmt };
+    }""", {"ms": future_ms, "fmt": schedule_str})
+    
+    ts(f"  [Vue State] 注入結果: {state_diag}")
 
     # 關閉日曆
     await page.evaluate("() => { const c = document.querySelector('.flatpickr-calendar.open'); if(c) document.body.click(); }")
