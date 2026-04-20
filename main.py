@@ -1232,55 +1232,49 @@ async def _select_schedule_post(page: Page) -> str:
     """
     import json as _json
 
-    # ─── 步驟 1：展開下拉選單 ──────────────────────────────────────
+# ─── 步驟 1：展開下拉選單 ──────────────────────────────────────
     ts("展開排程下拉選單...")
-    for _ in range(3):
-        opened = await page.evaluate("""() => {
-            const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-            const btn = document.querySelector('.cm-dropdown__btn') ||
-                Array.from(document.querySelectorAll('button,[role="button"]'))
-                    .find(el => el.innerText && el.innerText.includes('立即發文') && isVis(el));
-            if (btn && isVis(btn)) { btn.click(); return btn.className || '(clicked)'; }
-            return null;
-        }""")
-        if opened:
-            ts(f"  已點擊下拉按鈕")
-            break
-        await page.wait_for_timeout(800)
+    try:
+        # 強制等待動畫與遮罩跑完
+        await page.wait_for_timeout(2000)
+        
+        # 尋找下拉按鈕：優先找專屬 class，找不到再找「立即發文」旁邊的按鈕
+        dropdown_btns = [
+            page.locator("button.cm-dropdown__btn").first,
+            page.locator("button:has-text('立即發文') + button").first
+        ]
+        
+        clicked = False
+        for btn in dropdown_btns:
+            if await btn.count() > 0:
+                await btn.scroll_into_view_if_needed()
+                await btn.click(force=True, timeout=5000)  # force=True 穿透任何遮罩
+                clicked = True
+                break
+                
+        if not clicked:
+            raise Exception("無符合的按鈕選擇器")
+            
+        ts("  已成功點擊下拉按鈕")
+    except Exception as e:
+        ts(f"  [ERROR] 點擊下拉按鈕失敗: {e}")
+        await _save_debug_snapshot(page, "error_dropdown_btn")
+        raise RuntimeError("找不到下拉選單按鈕，請查看 debug_snapshots 截圖")
+
     await page.wait_for_timeout(1200)
 
     # ─── 步驟 2：點擊「排程發文」選項 ────────────────────────────
     ts("點擊排程發文選項...")
-    schedule_clicked = False
-    for _ in range(5):
-        result = await page.evaluate("""() => {
-            const isVis = el => {
-                const r = el.getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) return true;
-                let p = el.parentElement;
-                while (p && p !== document.documentElement) {
-                    if (window.getComputedStyle(p).display === 'none') return false;
-                    p = p.parentElement;
-                }
-                return false;
-            };
-            const all = Array.from(document.querySelectorAll('*'));
-            const exact = all.find(el => el.children.length === 0 && el.innerText &&
-                el.innerText.trim() === '排程發文' && isVis(el));
-            if (exact) { exact.click(); return 'exact'; }
-            const loose = all.find(el => el.innerText &&
-                el.innerText.includes('排程發文') && isVis(el));
-            if (loose) { loose.click(); return 'loose:' + loose.tagName; }
-            return null;
-        }""")
-        if result:
-            ts(f"  已點擊排程發文（{result}）")
-            schedule_clicked = True
-            break
-        await page.wait_for_timeout(800)
-
-    if not schedule_clicked:
-        raise RuntimeError("找不到「排程發文」選項，請確認下拉選單是否已正確展開")
+    try:
+        # 精準尋找出現的「排程發文」選項並強制點擊
+        schedule_opt = page.locator(".cm-dropdown__item:has-text('排程發文'), li:has-text('排程發文'), text='排程發文'").first
+        await schedule_opt.wait_for(state="visible", timeout=3000)
+        await schedule_opt.click(force=True)
+        ts("  已成功點擊「排程發文」")
+    except Exception as e:
+        ts(f"  [ERROR] 點擊排程發文選項失敗: {e}")
+        await _save_debug_snapshot(page, "error_schedule_opt")
+        raise RuntimeError("找不到「排程發文」選項，請查看 debug_snapshots 截圖")
 
     await page.wait_for_timeout(1500)
 
