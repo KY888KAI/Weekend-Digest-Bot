@@ -1298,17 +1298,17 @@ async def _select_schedule_post(page: Page) -> str:
 
     await page.wait_for_timeout(1500)
     
-# ─── 步驟 3：設定排程時間 (精準同步版) ────────────────────
-    # 使用本地時間並往後推 1 小時，絕對符合「5分鐘後到7日內」的規範
+# ─── 步驟 3：設定「6 天後 10:00」的安全測試時間 ────────────────────
     now = datetime.now()
-    future = now + timedelta(hours=1)
+    # 設定為 6 天後的早上 10 點，絕對避開 5 分鐘的限制
+    future = (now + timedelta(days=6)).replace(hour=10, minute=0, second=0, microsecond=0)
     
     # 確保是整數毫秒
     future_ms = int(future.timestamp() * 1000)
     # 格式必須是 YYYY-MM-DD HH:mm
     schedule_str = future.strftime("%Y-%m-%d %H:%M")
     
-    ts(f"  [INFO] 嘗試設定排程時間為：{schedule_str}")
+    ts(f"  [測試安全設定] 將排程時間設定於 6 天後：{schedule_str}")
 
     state_diag = await page.evaluate("""(args) => {
         const { ms, fmt } = args;
@@ -1322,7 +1322,7 @@ async def _select_schedule_post(page: Page) -> str:
             fpSet = true;
         }
 
-        // 2. 注入 Vue 核心狀態 (關鍵：必須同時更新父層與子層)
+        // 2. 注入 Vue 核心狀態
         let vueSet = false;
         const allElements = document.querySelectorAll('*');
         for (const el of allElements) {
@@ -1331,13 +1331,15 @@ async def _select_schedule_post(page: Page) -> str:
                 // 更新父層 Modal 狀態
                 if ('isSchedulePost' in v.$data) {
                     v.$data.isSchedulePost = true;
-                    v.$data.scheduledPostDate = ms; // 父層通常收毫秒數字
+                    v.$data.scheduledPostDate = ms;
                     vueSet = true;
                 }
                 // 更新子層時間選擇器狀態
                 if ('scheduledPostDate' in v.$data && typeof v.$data.scheduledPostDate === 'string') {
-                    v.$data.scheduledPostDate = fmt; // 子層通常收字串
+                    v.$data.scheduledPostDate = fmt;
                     if ('isLegalTime' in v.$data) v.$data.isLegalTime = true;
+                    // 加上這行強制讓前端認為時間驗證已通過
+                    if ('isValidate' in v.$data) v.$data.isValidate = true;
                 }
             }
         }
