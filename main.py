@@ -1451,12 +1451,11 @@ async def _select_schedule_post(page: Page) -> str:
     ts(f"  已點擊按鈕：{clicked[:80]}")
 
 # ─── 步驟 7：處理「標記個股」與「只有叉叉」的干擾彈窗 ─────────────────────
-    await page.wait_for_timeout(1500)
-    await _save_debug_snapshot(page, "after_submit_click")
-
-    ts("  [防呆機制] 正在排除標記個股與干擾彈窗...")
-    # 同時處理：確認類按鈕、文字類關閉按鈕、以及你提到的「叉叉(X)」按鈕
-    for _ in range(6):
+    ts("  [防呆機制] 等待並排除標記個股與干擾彈窗...")
+    
+    # 關鍵修正：不要馬上放棄！每 0.5 秒檢查一次，最多等 5 秒 (10次)
+    # 這就是模擬人類「等彈窗跳出來」的動作
+    for attempt in range(10):
         handled = await page.evaluate("""() => {
             const CONFIRM = ['全部標記','標記','確認','確定','繼續','同意'];
             const DISMISS = ['我知道了','知道了','關閉','好的','OK'];
@@ -1469,7 +1468,7 @@ async def _select_schedule_post(page: Page) -> str:
             
             const btns = Array.from(document.querySelectorAll('button, [role="button"], .cm-btn, .dialog__closeBtn'));
             
-            // 1. 優先處理「只有叉叉」的按鈕 (根據你提供的 HTML 結構)
+            // 1. 優先處理「只有叉叉」的按鈕
             const xBtn = btns.find(b => isVis(b) && (b.classList.contains('dialog__closeBtn') || b.getAttribute('aria-label') === 'Close'));
             if (xBtn) { xBtn.click(); return 'X_Close_Button'; }
 
@@ -1481,7 +1480,7 @@ async def _select_schedule_post(page: Page) -> str:
             
             // 3. 處理有文字的關閉按鈕
             for (const txt of DISMISS) {
-                const b = btns.find(b => isVis(b) && b.innerText && b.innerText.trim().includes(txt);
+                const b = btns.find(b => isVis(b) && b.innerText && b.innerText.trim().includes(txt));
                 if (b) { b.click(); return 'dismiss:' + txt; }
             }
             return null;
@@ -1489,12 +1488,13 @@ async def _select_schedule_post(page: Page) -> str:
         
         if handled:
             ts(f"  已自動清除障礙：{handled}")
-            await page.wait_for_timeout(1500) # 給系統時間反應
+            await page.wait_for_timeout(1500) # 點完後給系統時間反應
+            break # 處理完畢，跳出迴圈去等 API
         else:
-            break
-        
-        # 沒找到就等半秒再找一次，對付動畫慢的彈窗
-        await page.wait_for_timeout(500)
+            # 沒找到？沒關係，等 0.5 秒再找一次！
+            await page.wait_for_timeout(500)
+            
+    await _save_debug_snapshot(page, "after_submit_click")
 
     # ─── 步驟 8：等待 API 回應（最多 10 秒）──────────────────────
     ts("  等待發文 API 回應（最多 10 秒）...")
