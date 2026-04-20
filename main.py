@@ -1449,40 +1449,37 @@ async def _select_schedule_post(page: Page) -> str:
         raise RuntimeError("找不到可見的 messageModal__submit 按鈕，無法送出")
     ts(f"  已點擊按鈕：{clicked[:80]}")
 
- # ─── 步驟 7：儲存 debug 截圖，並攔截標記個股彈窗 ─────────────────────
-    await page.wait_for_timeout(1200)
+ # ─── 步驟 7：處理「標記個股」與發文後的干擾彈窗 ─────────────────────
+    ts("  [防呆機制] 啟動終極彈窗攔截...")
+    
+    # 等待預測 API 跑完並彈出視窗
+    await page.wait_for_timeout(2000)
     await _save_debug_snapshot(page, "after_submit_click")
 
-    ts("  [防呆機制] 檢查並處理「自動標記個股」與其他彈窗...")
-    # 排程確認、標記個股 → 點確認；錯誤提示 → 點關閉
-    for _ in range(6):
-        handled = await page.evaluate("""() => {
-            // 擴充確認按鈕清單，加入「全部標記」、「標記」對付 TWB33
-            const CONFIRM  = ['確認','確定','繼續','送出','同意','全部標記','標記'];
-            const DISMISS  = ['我知道了','知道了','關閉','好的','OK'];
-            const isVis = el => {
-                if (!el || el.disabled) return false;
-                const r = el.getBoundingClientRect();
-                const s = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 &&
-                       s.display !== 'none' && s.visibility !== 'hidden';
-            };
-            const btns = Array.from(document.querySelectorAll('.dialog__content button, .cm-modal button, [role="dialog"] button, .el-dialog button, button, [role="button"], .cm-btn'));
-            for (const txt of CONFIRM) {
-                const b = btns.find(b => isVis(b) && b.innerText && b.innerText.trim() === txt);
-                if (b) { b.click(); return 'confirm:' + txt; }
-            }
-            for (const txt of DISMISS) {
-                const b = btns.find(b => isVis(b) && b.innerText && b.innerText.trim() === txt);
-                if (b) { b.click(); return 'dismiss:' + txt; }
-            }
-            return null;
-        }""")
+    # 定義所有可能出現的「確認」與「關閉」字眼
+    target_texts = ['全部標記', '標記', '確認', '確定', '我知道了', '關閉']
+    
+    handled = False
+    for attempt in range(4): # 給他 4 次機會
+        for text in target_texts:
+            try:
+                # 終極暴力點擊：不限層級，只要畫面上看得到這個字的按鈕，就強行點下去
+                btn = page.locator(f"button:has-text('{text}'), .cm-btn:has-text('{text}')").first
+                if await btn.count() > 0 and await btn.is_visible():
+                    await btn.click(force=True)
+                    ts(f"  [彈窗解除] 已強制點擊：{text}")
+                    handled = True
+                    break # 點到一個就跳出這層迴圈
+            except Exception:
+                continue
+                
         if handled:
-            ts(f"  已自動處理彈窗並點擊：{handled}")
-            await page.wait_for_timeout(1500) # 給系統時間反應並重送 API
-        else:
+            # 點擊後等待一下，因為同學會重送 API 需要時間
+            await page.wait_for_timeout(2000)
             break
+        
+        # 沒找到就等半秒再找一次，對付動畫慢的彈窗
+        await page.wait_for_timeout(500)
 
     # ─── 步驟 8：等待 API 回應（最多 10 秒）──────────────────────
     ts("  等待發文 API 回應（最多 10 秒）...")
