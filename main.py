@@ -1235,48 +1235,31 @@ async def _select_schedule_post(page: Page) -> str:
 # ─── 步驟 1：展開下拉選單 ──────────────────────────────────────
     ts("展開排程下拉選單...")
     try:
-        # 強制等待動畫與遮罩跑完
-        await page.wait_for_timeout(2000)
+        # 根據你提供的 HTML，直接定位 cm-dropdown__btn 並過濾文字內容
+        dropdown_btn = page.locator("button.cm-dropdown__btn:has-text('排程發文'), button.cm-dropdown__btn:has-text('立即發文')").first
         
-        # 尋找下拉按鈕：優先找專屬 class，找不到再找「立即發文」旁邊的按鈕
-        dropdown_btns = [
-            page.locator("button.cm-dropdown__btn").first,
-            page.locator("button:has-text('立即發文') + button").first
-        ]
-        
-        clicked = False
-        for btn in dropdown_btns:
-            if await btn.count() > 0:
-                await btn.scroll_into_view_if_needed()
-                await btn.click(force=True, timeout=5000)  # force=True 穿透任何遮罩
-                clicked = True
-                break
-                
-        if not clicked:
-            raise Exception("無符合的按鈕選擇器")
-            
-        ts("  已成功點擊下拉按鈕")
+        await dropdown_btn.wait_for(state="visible", timeout=5000)
+        # 使用 force=True 確保即便有透明遮罩也能點擊
+        await dropdown_btn.click(force=True)
+        ts("  成功點擊下拉按鈕")
     except Exception as e:
-        ts(f"  [ERROR] 點擊下拉按鈕失敗: {e}")
+        ts(f"  [ERROR] 找不到下拉按鈕: {e}")
         await _save_debug_snapshot(page, "error_dropdown_btn")
-        raise RuntimeError("找不到下拉選單按鈕，請查看 debug_snapshots 截圖")
+        raise
 
-    await page.wait_for_timeout(1200)
-
-    # ─── 步驟 2：點擊「排程發文」選項 ────────────────────────────
+   # ─── 步驟 2：點擊「排程發文」選項 ────────────────────────────
     ts("點擊排程發文選項...")
     try:
-        # 精準尋找出現的「排程發文」選項並強制點擊
-        schedule_opt = page.locator(".cm-dropdown__item:has-text('排程發文'), li:has-text('排程發文'), text='排程發文'").first
+        # 直接尋找類名為 cm-dropdown__item 且包含「排程發文」文字的元素
+        schedule_opt = page.locator(".cm-dropdown__item:has-text('排程發文'), .cm-dropdown__btnContent:has-text('排程發文')").last
+        
         await schedule_opt.wait_for(state="visible", timeout=3000)
         await schedule_opt.click(force=True)
-        ts("  已成功點擊「排程發文」")
+        ts("  已成功選擇「排程發文」")
     except Exception as e:
-        ts(f"  [ERROR] 點擊排程發文選項失敗: {e}")
+        ts(f"  [ERROR] 點擊排程選項失敗: {e}")
         await _save_debug_snapshot(page, "error_schedule_opt")
-        raise RuntimeError("找不到「排程發文」選項，請查看 debug_snapshots 截圖")
-
-    await page.wait_for_timeout(1500)
+        raise
 
     # ─── 步驟 3：設定排程時間 + 注入 Vue state ────────────────────
     future = datetime.now() + timedelta(days=2)
