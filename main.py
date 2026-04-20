@@ -1298,17 +1298,14 @@ async def _select_schedule_post(page: Page) -> str:
 
     await page.wait_for_timeout(1500)
     
-# ─── 步驟 3：設定「6 天後 10:00」的安全測試時間 ────────────────────
+# ─── 步驟 3：設定排程時間 (6天後安全測試版) ────────────────────
     now = datetime.now()
-    # 設定為 6 天後的早上 10 點，絕對避開 5 分鐘的限制
     future = (now + timedelta(days=6)).replace(hour=10, minute=0, second=0, microsecond=0)
     
-    # 確保是整數毫秒
     future_ms = int(future.timestamp() * 1000)
-    # 格式必須是 YYYY-MM-DD HH:mm
     schedule_str = future.strftime("%Y-%m-%d %H:%M")
     
-    ts(f"  [測試安全設定] 將排程時間設定於 6 天後：{schedule_str}")
+    ts(f"  [INFO] 嘗試設定排程時間為：{schedule_str}")
 
     state_diag = await page.evaluate("""(args) => {
         const { ms, fmt } = args;
@@ -1322,23 +1319,20 @@ async def _select_schedule_post(page: Page) -> str:
             fpSet = true;
         }
 
-        // 2. 注入 Vue 核心狀態
+        // 2. 注入 Vue 核心狀態 (增加 isValidate 強制通關)
         let vueSet = false;
         const allElements = document.querySelectorAll('*');
         for (const el of allElements) {
             const v = el.__vue__;
             if (v && v.$data) {
-                // 更新父層 Modal 狀態
                 if ('isSchedulePost' in v.$data) {
                     v.$data.isSchedulePost = true;
                     v.$data.scheduledPostDate = ms;
                     vueSet = true;
                 }
-                // 更新子層時間選擇器狀態
                 if ('scheduledPostDate' in v.$data && typeof v.$data.scheduledPostDate === 'string') {
                     v.$data.scheduledPostDate = fmt;
                     if ('isLegalTime' in v.$data) v.$data.isLegalTime = true;
-                    // 加上這行強制讓前端認為時間驗證已通過
                     if ('isValidate' in v.$data) v.$data.isValidate = true;
                 }
             }
@@ -1455,14 +1449,16 @@ async def _select_schedule_post(page: Page) -> str:
         raise RuntimeError("找不到可見的 messageModal__submit 按鈕，無法送出")
     ts(f"  已點擊按鈕：{clicked[:80]}")
 
-    # ─── 步驟 7：儲存 debug 截圖，並處理彈窗 ─────────────────────
+ # ─── 步驟 7：儲存 debug 截圖，並攔截標記個股彈窗 ─────────────────────
     await page.wait_for_timeout(1200)
     await _save_debug_snapshot(page, "after_submit_click")
 
-    # 排程確認 modal → 點確認；錯誤提示 → 點關閉
+    ts("  [防呆機制] 檢查並處理「自動標記個股」與其他彈窗...")
+    # 排程確認、標記個股 → 點確認；錯誤提示 → 點關閉
     for _ in range(6):
         handled = await page.evaluate("""() => {
-            const CONFIRM  = ['確認','確定','繼續','送出','同意'];
+            // 擴充確認按鈕清單，加入「全部標記」、「標記」對付 TWB33
+            const CONFIRM  = ['確認','確定','繼續','送出','同意','全部標記','標記'];
             const DISMISS  = ['我知道了','知道了','關閉','好的','OK'];
             const isVis = el => {
                 if (!el || el.disabled) return false;
@@ -1471,7 +1467,7 @@ async def _select_schedule_post(page: Page) -> str:
                 return r.width > 0 && r.height > 0 &&
                        s.display !== 'none' && s.visibility !== 'hidden';
             };
-            const btns = Array.from(document.querySelectorAll('button,[role="button"],.cm-btn'));
+            const btns = Array.from(document.querySelectorAll('.dialog__content button, .cm-modal button, [role="dialog"] button, .el-dialog button, button, [role="button"], .cm-btn'));
             for (const txt of CONFIRM) {
                 const b = btns.find(b => isVis(b) && b.innerText && b.innerText.trim() === txt);
                 if (b) { b.click(); return 'confirm:' + txt; }
@@ -1483,8 +1479,8 @@ async def _select_schedule_post(page: Page) -> str:
             return null;
         }""")
         if handled:
-            ts(f"  已處理彈窗：{handled}")
-            await page.wait_for_timeout(800)
+            ts(f"  已自動處理彈窗並點擊：{handled}")
+            await page.wait_for_timeout(1500) # 給系統時間反應並重送 API
         else:
             break
 
