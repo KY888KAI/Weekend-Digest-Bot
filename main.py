@@ -1300,7 +1300,6 @@ async def _select_schedule_post(page: Page) -> str:
     
 # ─── 步驟 3：設定「3 天後 10:00」的安全測試時間 ────────────────────
     now = datetime.now()
-    # 設定為 3 天後，確保絕對在 5 分鐘後且 7 天內
     future = (now + timedelta(days=3)).replace(hour=10, minute=0, second=0, microsecond=0)
     future_ms = int(future.timestamp() * 1000)
     schedule_str = future.strftime("%Y-%m-%d %H:%M")
@@ -1309,16 +1308,15 @@ async def _select_schedule_post(page: Page) -> str:
 
     state_diag = await page.evaluate("""(args) => {
         const { ms, fmt } = args;
-        const d = new Date(ms);
         
-        // 1. 同步 Flatpickr 插件並觸發變更事件
+        // 1. 同步 Flatpickr 插件 (強制使用字串傳入，破解 Playwright UTC 時區偏差 8 小時的坑)
         const fpInput = document.querySelector('#addScheduleDate, input.schedulePost__datePicker');
         if (fpInput && fpInput._flatpickr) {
-            fpInput._flatpickr.setDate(d, true); // true 會觸發插件的 onChange
-            fpInput._flatpickr.close(); // 安全關閉日曆，絕對不要去點 body！
+            fpInput._flatpickr.setDate(fmt, true, "Y-m-d H:i");
+            fpInput._flatpickr.close(); // 安全關閉日曆
         }
 
-        // 2. 暴力同步 Vue State (父子層同時更新)
+        // 2. 暴力同步 Vue State
         let vueSynced = false;
         document.querySelectorAll('*').forEach(el => {
             const v = el.__vue__;
@@ -1444,34 +1442,50 @@ async def _select_schedule_post(page: Page) -> str:
         raise RuntimeError("找不到可見的 messageModal__submit 按鈕，無法送出")
     ts(f"  已點擊按鈕：{clicked[:80]}")
 
-# ─── 步驟 7：處理「標記個股」與「只有叉叉」的干擾彈窗 ─────────────────────
+# ─── 步驟 7：處理干擾彈窗（精準避開主視窗） ─────────────────────
     ts("  [防呆機制] 啟動監測：等待並排除標記個股與退出編輯彈窗...")
     
-    # 模擬人類：每 0.5 秒檢查一次，最多等 5 秒 (10次)
     handled_any = False
     for attempt in range(10):
         handled = await page.evaluate("""() => {
             const isVis = el => {
+                if (!el) return false;
                 const r = el.getBoundingClientRect();
                 const s = window.getComputedStyle(el);
                 return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
             };
             
-            const allBtns = Array.from(document.querySelectorAll('button, [role="button"], .cm-btn, .dialog__closeBtn'));
+            const allBtns = Array.from(document.querySelectorAll('button, [role="button"], .cm-btn'));
             
-            // 0. 針對你抓到的「退出編輯」警告，必須點擊「繼續編輯」！
+            // 0. 救命機制：萬一真的觸發了「退出編輯」警告，立刻點「繼續編輯」
             const continueBtn = allBtns.find(b => isVis(b) && b.innerText && b.innerText.trim() === '繼續編輯');
             if (continueBtn) { continueBtn.click(); return '繼續編輯'; }
 
-            // 1. 優先處理叉叉按鈕 (X)
-            const xBtn = allBtns.find(b => isVis(b) && (b.classList.contains('dialog__closeBtn') || b.getAttribute('aria-label') === 'Close'));
-            if (xBtn) { xBtn.click(); return 'X_Close_Button'; }
+            // 1. 處理只有叉叉的干擾彈窗 (關鍵：避開主發文視窗的叉叉)
+            const xBtns = Array.from(document.querySelectorAll('button.dialog__closeBtn, button[aria-label="Close"]')).filter(isVis);
+            
+            for (const xBtn of xBtns) {
+                // 找這個叉叉的父層彈窗
+                const dialog = xBtn.closest('.dialog__content, .cm-modal, [role="dialog"], .el-dialog, .messageModal');
+                // 判斷這個彈窗裡面有沒有「發文」按鈕？如果有，它就是主視窗，絕對不能點！
+                const isMainEditor = dialog ? (dialog.querySelector('.messageModal__submit') !== null) : false;
+                
+                // 如果它不是主視窗，就是 TWB33 這類的干擾彈窗，直接點掉！
+                if (!isMainEditor) {
+                    xBtn.click();
+                    return 'X_Close_Button_Interference';
+                }
+            }
 
-            // 2. 處理「標記」、「確認」等字眼
+            // 2. 處理有文字的確認按鈕
             const CONFIRM_TEXTS = ['全部標記', '標記', '確認', '確定', '繼續', '同意'];
             for (const txt of CONFIRM_TEXTS) {
                 const b = allBtns.find(btn => isVis(btn) && btn.innerText && btn.innerText.trim().includes(txt));
-                if (b) { b.click(); return 'Text_Button:' + txt; }
+                // 確保點擊的不是發文按鈕本身
+                if (b && !b.classList.contains('messageModal__submit')) { 
+                    b.click(); 
+                    return 'Text_Button:' + txt; 
+                }
             }
             return null;
         }""")
