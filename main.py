@@ -539,14 +539,17 @@ async def stage1_gemini(ctx: BrowserContext, run_mode: str, holiday_start, holid
         if attempt < 2:
             ts("  送出修正 Prompt，要求 Gemini 重新輸出...")
             correction = (
-                "你的文章中指數數字與確認數據不符，以下是唯一正確數據，"
-                "請嚴格照用這些數字（包含日期、方向、百分比），重新輸出完整修正後的文章：\n\n"
-                f"{market_block}\n\n"
-                "須修正的錯誤項目：\n" +
-                "\n".join(f"✗ {e}" for e in errors) +
-                "\n\n請重新輸出完整文章，確保所有指數數字與上面完全一致。\n"
-                "【極重要排版規定】段落之間務必保留「空行」與「--」分隔線，確切依照先前要求的格式，絕對不可將所有文字擠在同一行！"
-            )
+    "你的文章中指數數字與確認數據不符，以下是唯一正確數據，"
+    "請嚴格照用這些數字（包含日期、方向、百分比），重新輸出完整修正後的文章：\n\n"
+    f"{market_block}\n\n"
+    "須修正的錯誤項目：\n" +
+    "\n".join(f"✗ {e}" for e in errors) +
+    "\n\n"
+    "【格式與排版絕對要求】：\n"
+    "1. 必須保留段落間的「空行」。\n"
+    "2. 指數表現與重點事件之間必須加入一行「-」作為分隔線。\n"
+    "3. 請完全依照需求範例的結構輸出，不可將文字擠在一起。"
+)
             await _gemini_send(page, correction)
             ts("  等待 Gemini 修正回應...")
             response1 = await _gemini_get_last_response(page)
@@ -805,18 +808,18 @@ def _verify_numbers(market_block: str, gemini_text: str, tolerance: float = 0.05
     return errors
 
 def _clean_body(text: str) -> str:
-    """清理 Gemini 輸出殘留的 markdown 格式（**粗體**、*斜體*、## 標題符號）"""
+    """清理 Gemini 輸出殘留的 markdown 格式，但保留換行"""
     lines = text.splitlines()
     cleaned = []
     for line in lines:
-        # 移除粗體/斜體 markdown，保留內文
+        # 移除粗體 **
         line = re.sub(r'\*{1,3}([^*]*?)\*{1,3}', r'\1', line)
-        # 移除標題符號
+        # 移除標題 #
         line = re.sub(r'^#{1,6}\s*', '', line)
         cleaned.append(line)
+    
+    # 這裡必須用 \n 連接，確保原始的空行 (empty string) 被還原成 \n\n
     result = '\n'.join(cleaned)
-    # 移除開頭殘留的孤立 ** 或 *
-    result = re.sub(r'^\*+\s*\n?', '', result)
     return result.strip()
 
 
