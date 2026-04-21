@@ -544,7 +544,8 @@ async def stage1_gemini(ctx: BrowserContext, run_mode: str, holiday_start, holid
                 f"{market_block}\n\n"
                 "須修正的錯誤項目：\n" +
                 "\n".join(f"✗ {e}" for e in errors) +
-                "\n\n請重新輸出完整文章，確保所有指數數字與上面完全一致。"
+                "\n\n請重新輸出完整文章，確保所有指數數字與上面完全一致。\n"
+                "【極重要排版規定】段落之間務必保留「空行」與「--」分隔線，確切依照先前要求的格式，絕對不可將所有文字擠在同一行！"
             )
             await _gemini_send(page, correction)
             ts("  等待 Gemini 修正回應...")
@@ -1298,6 +1299,20 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
     await _set_stock_tag(page)
     await page.wait_for_timeout(400)
     await _delete_attached_images(page)
+
+    if focused:
+            await page.wait_for_timeout(300)
+            
+            # --- 加入這段來保證所見即所得 ---
+            ts("=" * 40)
+            ts("【即將貼上到 CMoney 的最終內文預覽】")
+            for line in body.splitlines():
+                ts(f"| {line}")  # 前面加個 | 符號，方便你看清楚哪裡有空行
+            ts("=" * 40)
+            # -------------------------------
+
+            # 2. 使用 Playwright 原生的 insert_text
+            await page.keyboard.insert_text(body)
 
     # ── 輸入內文：捨棄 Vue 注入與 native setter，改用純鍵盤模擬貼上 ──
     # 放在標個股／刪圖片之後，避免標記操作干擾已輸入的內文
