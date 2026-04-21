@@ -426,6 +426,7 @@ async def main():
                 cache_used = True
             if not cache_used:
                 title, body, push_text = await stage1_gemini(gemini_ctx, run_mode, holiday_start, holiday_end)
+                body = _enforce_dashes(body)
                 if test_mode or test_holiday:
                     cache_file.write_text(
                         json.dumps({"title": title, "body": body, "push_text": push_text},
@@ -807,6 +808,30 @@ def _verify_numbers(market_block: str, gemini_text: str, tolerance: float = 0.05
             errors.append(f"{name}：應為{exp_dir}{abs(exp_pct):.2f}%（未在輸出中找到正確數字）")
 
     return errors
+
+def _enforce_dashes(text: str) -> str:
+    """強制在特定段落前加上獨立的減號分隔線"""
+    import re
+    
+    # 1. 針對這三個固定的段落開頭，強制在前面塞入 \n-\n
+    # 這裡涵蓋了「週日模式」跟「連假模式」可能的標題
+    sections = [
+        r"週五美股主要指數表現",
+        r"連假期間美股主要指數總表現",
+        r"連假期間重點事件與市場影響",
+        r"整體市場情緒"
+    ]
+    
+    for sec in sections:
+        # 將「換行 + 段落標題」替換成「換行 + 減號 + 換行 + 段落標題」
+        text = re.sub(rf"\n({sec})", r"\n-\n\1", text)
+        
+    # 2. 防呆機制：如果 Gemini 剛好很乖有產出減號，或是我們不小心重複加了
+    # 把連續的「減號換行減號」清理回單一減號
+    text = re.sub(r'\n-\n\s*-\n', r'\n-\n', text)
+    text = re.sub(r'\n-\n-\n', r'\n-\n', text)
+    
+    return text.strip()
 
 def _clean_body(text: str) -> str:
     """清理 Gemini 輸出殘留的 markdown 格式（**粗體**、*斜體*、## 標題符號）"""
