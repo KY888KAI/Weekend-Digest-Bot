@@ -823,28 +823,38 @@ def _verify_numbers(market_block: str, gemini_text: str, tolerance: float = 0.05
     return errors
 
 def _enforce_dashes(text: str) -> str:
-    """強制在特定段落前加上獨立的減號分隔線"""
+    """強制在特定段落前加減號，但在 ● 之間僅進行斷行（不加減號）"""
     import re
     
-    # 1. 針對這三個固定的段落開頭，強制在前面塞入 \n-\n
-    # 這裡涵蓋了「週日模式」跟「連假模式」可能的標題
-    sections = [
+    # 1. 處理大段落分隔（保留減號）：針對這幾個核心標題，前面強行插入 \n-\n
+    major_sections = [
         r"週五美股主要指數表現",
         r"連假期間美股主要指數總表現",
         r"連假期間重點事件與市場影響",
         r"整體市場情緒"
     ]
-    
-    for sec in sections:
-        # 將「換行 + 段落標題」替換成「換行 + 減號 + 換行 + 段落標題」
-        text = re.sub(rf"\n({sec})", r"\n-\n\1", text)
+    for sec in major_sections:
+        # 確保大段落標題前有 \n-\n
+        text = re.sub(rf"\n+({sec})", r"\n-\n\1", text)
         
-    # 2. 防呆機制：如果 Gemini 剛好很乖有產出減號，或是我們不小心重複加了
-    # 把連續的「減號換行減號」清理回單一減號
-    text = re.sub(r'\n-\n\s*-\n', r'\n-\n', text)
-    text = re.sub(r'\n-\n-\n', r'\n-\n', text)
+    # 2. 處理小重點分隔（僅斷行，不要減號）：
+    # 尋找所有「換行 + ●」，並將其替換為「雙換行 + ●」
+    # 使用 lookbehind (?<=\n) 確保它不是文章的最開頭
+    text = re.sub(r"\n●", r"\n\n●", text)
+
+    # 3. 強力清理多餘的空行與符號
+    # 把三個以上的換行縮減為兩個（維持最多一個空行）
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # 確保減號分隔線前後是乾淨的單一換行
+    text = re.sub(r'\n+\s*-\s*\n+', '\n-\n', text)
     
-    return text.strip()
+    # 4. 最終修整
+    text = text.strip()
+    # 如果最開頭不小心被塞了減號或空行，削掉它
+    if text.startswith("-\n"):
+        text = text[2:].strip()
+        
+    return text
 
 def _clean_body(text: str) -> str:
     """清理 Gemini 輸出殘留的 markdown 格式（**粗體**、*斜體*、## 標題符號）"""
