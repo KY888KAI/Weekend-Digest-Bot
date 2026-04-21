@@ -544,7 +544,11 @@ async def stage1_gemini(ctx: BrowserContext, run_mode: str, holiday_start, holid
                 f"{market_block}\n\n"
                 "須修正的錯誤項目：\n" +
                 "\n".join(f"✗ {e}" for e in errors) +
-                "\n\n請重新輸出完整文章，確保所有指數數字與上面完全一致。"
+                "\n\n"
+                "【格式與排版絕對要求】：\n"
+                "1. 必須保留段落間的「空行」。\n"
+                "2. 指數表現與重點事件之間必須加入一行「-」作為分隔線。\n"
+                "3. 請完全依照需求範例的結構輸出，不可將文字擠在一起。"
             )
             await _gemini_send(page, correction)
             ts("  等待 Gemini 修正回應...")
