@@ -903,111 +903,47 @@ STOCK_TAG        = "加權指數"   # 發文預設標記指數
 
 
 async def _set_stock_tag(page: Page, tag_query: str = STOCK_TAG):
-    """在發文 modal 中設定股票/指數標記（加權指數）"""
+    """在發文 modal 中設定股票/指數標記（純 DOM 模擬，避免 Vue 注入導致鬼打牆）"""
     ts(f"設定股票標記：{tag_query}")
 
-    # 最優先：點擊「熱門標記」按鈕（modalTags__btn--popular）
-    popular_clicked = await page.evaluate("""(query) => {
-        const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-        const btns = Array.from(document.querySelectorAll('.modalTags__btn--popular'));
-        const btn = btns.find(el => isVis(el) && el.innerText && el.innerText.trim().includes(query));
-        if (btn) { btn.click(); return btn.innerText.trim().slice(0, 30); }
-        return null;
-    }""", tag_query)
-    if popular_clicked:
-        ts(f"  已點擊熱門標記按鈕：{popular_clicked}")
-        await page.wait_for_timeout(500)
-        return
-
-    # 次優先：Vue state 直接注入
-    injected = await page.evaluate("""(query) => {
-        for (const el of document.querySelectorAll('*')) {
-            const v = el.__vue__;
-            if (!v || !v.$data) continue;
-            const d = v.$data;
-            for (const key of ['stockSearchText', 'stockKeyword', 'searchStockText', 'stockSearch']) {
-                if (key in d) {
-                    d[key] = query;
-                    try { v.$emit('input', query); } catch(e) {}
-                    return 'vue:' + key;
-                }
-            }
-        }
-        return null;
-    }""", tag_query)
-
-    if injected:
-        ts(f"  Vue注入：{injected}，等待搜尋結果...")
-        await page.wait_for_timeout(1000)
-        clicked = await page.evaluate("""(query) => {
-            const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-            for (const sel of ['li', '.cm-dropdown__item', '[role="option"]']) {
-                const found = Array.from(document.querySelectorAll(sel))
-                    .find(el => isVis(el) && el.innerText && el.innerText.includes(query));
-                if (found) { found.click(); return found.innerText.trim().slice(0, 30); }
-            }
-            return null;
-        }""", tag_query)
-        if clicked:
-            ts(f"  已選擇標記：{clicked}")
-            await page.wait_for_timeout(500)
-            return
-
-    # Fallback：DOM 輸入框搜尋
-    tag_input_sels = [
-        'input[placeholder*="股票"]',
-        'input[placeholder*="標記"]',
-        'input[placeholder*="搜尋股票"]',
-        '.messageModal__searchStock input',
-        '.stockSearch input',
-    ]
-    for sel in tag_input_sels:
-        try:
-            el = page.locator(sel).first
-            if await el.count() > 0 and await el.is_visible():
-                await el.fill(tag_query)
-                await page.wait_for_timeout(1000)
-                for opt_sel in [f'li:has-text("{tag_query}")', '.cm-dropdown__item', '[role="option"]']:
-                    try:
-                        opt_el = page.locator(opt_sel).first
-                        if await opt_el.count() > 0 and await opt_el.is_visible():
-                            text = await opt_el.inner_text()
-                            await opt_el.click()
-                            ts(f"  已選擇標記：{text[:30]}")
-                            await page.wait_for_timeout(500)
-                            return
-                    except Exception:
-                        pass
-                ts(f"  輸入了搜尋字但找不到下拉選項")
-                return
-        except Exception:
-            pass
-
-    # 最終 Fallback：點擊「標個股」按鈕 → 在 modalSearch__input 搜尋框輸入 → Enter
-    ts("  嘗試透過「標個股」按鈕開啟搜尋介面...")
-    tag_btn_clicked = await page.evaluate("""() => {
-        const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-        const btns = Array.from(document.querySelectorAll('.modalAttach__btn'));
-        const btn = btns.find(el => isVis(el) && el.innerText && el.innerText.includes('標個股'));
-        if (btn) { btn.click(); return true; }
-        return false;
-    }""")
-    if tag_btn_clicked:
-        await page.wait_for_timeout(800)
-        search_input = page.locator('input.modalSearch__input[type="search"]').first
-        if await search_input.count() > 0 and await search_input.is_visible():
-            await search_input.fill(tag_query)
-            await page.wait_for_timeout(600)
-            await search_input.press("Enter")
+    # 1. 點擊「標個股」按鈕
+    try:
+        tag_btn = page.locator('.modalAttach__btn:has-text("標個股"), button:has-text("標個股")').first
+        if await tag_btn.count() > 0 and await tag_btn.is_visible():
+            await tag_btn.click()
             await page.wait_for_timeout(800)
-            ts(f"  已透過「標個股」搜尋框標記：{tag_query}")
-            return
-        else:
-            ts("  「標個股」按鈕已點擊但找不到搜尋輸入框")
-    else:
-        ts("  未找到「標個股」按鈕")
+    except Exception:
+        pass
 
-    ts("  未找到股票標記輸入框，跳過")
+    # 2. 找到搜尋框並輸入
+    search_input = page.locator('input.modalSearch__input[type="search"], input[placeholder*="股票"], input[placeholder*="標記"]').first
+    if await search_input.count() > 0 and await search_input.is_visible():
+        await search_input.fill(tag_query)
+        ts(f"  已輸入搜尋：{tag_query}，等待下拉選項...")
+        await page.wait_for_timeout(1500)  # 必須給 API 抓資料的時間
+
+        # 3. 掃描並點擊下拉選項
+        options = page.locator('.cm-dropdown__item, [role="option"], li')
+        count = await options.count()
+        clicked = False
+        for i in range(count):
+            opt = options.nth(i)
+            if await opt.is_visible():
+                text = await opt.inner_text()
+                if tag_query in text:
+                    await opt.click()
+                    ts(f"  已成功選擇標記：{text.strip()}")
+                    clicked = True
+                    await page.wait_for_timeout(500)
+                    break
+
+        if not clicked:
+            # 沒找到完全匹配的選項，按 Enter 盲狙
+            await search_input.press("Enter")
+            ts("  未偵測到匹配的下拉選項，已嘗試送出 Enter")
+            await page.wait_for_timeout(500)
+    else:
+        ts("  找不到股票搜尋輸入框，略過標記")
 
 
 async def _delete_attached_images(page: Page):
@@ -1714,32 +1650,29 @@ async def _select_schedule_post(page: Page) -> str:
                     !b.classList.contains('messageModal__submit')
                 );
                 if (publishBtn) {
-                    // 終極鎖定：只留「加權指數」，其餘全部取消勾選
-                    const options = Array.from(ov.querySelectorAll('label, .cm-checkbox, .el-checkbox'));
+                    // 暴力清除所有 AI 推薦的勾選：抓取最外層以確保 click 能觸發 Vue 事件
+                    const options = Array.from(ov.querySelectorAll('label.cm-checkbox, label.el-checkbox, .cm-checkbox'));
                     options.forEach(opt => {
                         const text = opt.innerText || '';
-                        if (!text.trim()) return;
-                        
                         const isTaiex = text.includes('加權指數');
                         
-                        // 檢查該選項目前的狀態（是否已打勾）
-                        const input = opt.querySelector('input[type="checkbox"]');
-                        const isChecked = input ? input.checked : (opt.classList.contains('is-checked') || opt.querySelector('.cm-checkbox__input--checked, .is-checked') !== null);
+                        // 嚴格判斷是否已被勾選 (涵蓋 input 屬性與外層 class)
+                        const isChecked = opt.classList.contains('is-checked') || 
+                                          opt.querySelector('input:checked, .cm-checkbox__input--checked') !== null;
                         
-                        // 決策邏輯：
-                        // 如果「不是加權指數」但「被勾選了」 -> 點擊它取消勾選
+                        // 不是加權指數且被打勾 -> 點擊取消
                         if (!isTaiex && isChecked) {
                             try { opt.click(); } catch(e) {}
                         } 
-                        // 如果「是加權指數」但「沒被勾選」 -> 點擊它勾起來
+                        // 如果 AI 剛好有推加權指數但沒勾 -> 點擊勾選
                         else if (isTaiex && !isChecked) {
                             try { opt.click(); } catch(e) {}
                         }
                     });
 
-                    // 處理完勾選狀態後，再點擊發佈
+                    // 處理完勾選狀態後，按下發佈
                     publishBtn.click(); 
-                    return 'PredictStock:發佈文章(已強制鎖定加權指數)'; 
+                    return 'PredictStock:發佈文章(已清除無關的AI標記)'; 
                 }
 
                 // 2. 確認類按鈕（排除主發文按鈕；不自動全部標記股票，避免誤標半導體）
