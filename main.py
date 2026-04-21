@@ -72,29 +72,33 @@ GEMINI_PROMPT_1_HOLIDAY = (
 GEMINI_PROMPT_1_TEMPLATE = (
     "{intro}"
     "【發文日期】今天是 {publish_date}，文章標題首句日期請使用此日期。\n"
-    "首句標題字數限制30字以內。\n"
-    "以下為純格式範例（日期與數字皆為虛構，僅供參考文章結構，請勿使用這些數字）：\n\n"
+    "首句標題字數限制30字以內，且句尾必須包含「！」驚嘆號。\n\n"
+    "【排版與格式絕對要求】（非常重要，請嚴格遵守）：\n"
+    "1. 絕對禁止使用 Markdown 標題語法（如 # 或 ##）。\n"
+    "2. 段落之間必須使用單獨一行的「-」作為分隔線。\n"
+    "3. 必須保留原本的換行與空行，不可自行將文字擠成一團。\n"
+    "4. 請勿在開頭加入「標題：」或「以下是文章：」等冗言贅字，直接輸出標題與內文即可。\n\n"
+    "以下為純格式範例（日期與數字皆為虛構，僅供參考文章結構，請嚴格模仿此排版）：\n\n"
     "2026/3/1 通膨高預期、以伊爆衝突，連假事件一次看！\n"
     "幫大家快速複習這幾天美股表現與國際大事！\n"
-    "- 週五美股主要指數表現（2/27）：\n"
+    "-\n"
+    "週五美股主要指數表現（2/27）：\n"
     "📍標普500指數：下跌0.43%\n"
     "📍道瓊工業指數：下跌1.05%\n"
     "📍那斯達克綜合指數：下跌0.92%\n"
     "📍費城半導體指數：下跌1.21%\n"
-    "- 連假期間重點事件與市場影響：\n"
+    "-\n"
+    "連假期間重點事件與市場影響：\n"
     "● 2/27 經濟數據 + AI疑慮雙重壓力\n"
     "➤ 1月PPI通膨大幅超預期（整體+0.5%、核心+0.8%），降息希望再降溫\n"
-    "➤ AI對就業與商業模式的破壞性疑慮升溫（Block宣布裁員逾4,000人，近半員工），科技與金融股重挫\n"
-    "➤ 資金明顯輪動至公用事業、醫療等防禦型類股\n"
+    "➤ 資金明顯輪動至公用事業等防禦型類股\n"
     "● 2/28～3/1 美以對伊朗發動大規模軍事攻擊\n"
-    "➤ 美國與以色列聯合先制空襲，成功擊殺伊朗最高領袖哈梅內伊及其多名高官\n"
     "➤ 伊朗立即報復，發射導彈攻擊以色列本土與美國在中東軍事基地\n"
-    "➤ 川普親自宣布「轟炸將持續整個星期或必要時間」，衝突已進入第2天\n"
-    "➤ 市場即時衝擊：油價急漲、黃金飆升、VIX恐慌指數預計大升\n"
-    "- 整體市場情緒明顯避險為主。連假前本來就有通膨+AI疑慮，週末再爆發中東衝突，{week_ref}波動可能加大！\n\n"
+    "-\n"
+    "整體市場情緒明顯避險為主。連假前本來就有通膨+AI疑慮，週末再爆發中東衝突，{week_ref}波動可能加大！\n\n"
     "文案修飾規則：\n"
     "1. 名詞避免使用中國常用說法，例如：❌特朗普 ⭕川普　❌霍爾木茲海峽 ⭕荷姆茲海峽\n"
-    "2. 避免針對未來走勢使用過度肯定句，例如：❌短期內市場波動將持續居高不下！⭕{week_ref}波動可能仍劇烈！"
+    "2. 避免針對未來走勢使用過度肯定句，例如：❌短期內市場波動將持續居高不下！⭕{week_ref}波動可能仍劇烈！\n"
 )
 
 # ─── 市場數據抓取 ─────────────────────────────────────────────
@@ -140,7 +144,7 @@ def _fetch_single_day() -> str:
     else:
         wd, ds = "週五", "N/A"
 
-    header = f"- {wd}美股主要指數表現（{ds}）："
+    header = f"{wd}美股主要指數表現（{ds}）："
     return header + "\n" + "\n".join(lines)
 
 def _fetch_holiday_days(holiday_start, holiday_end=None) -> str:
@@ -218,7 +222,7 @@ def _fetch_holiday_days(holiday_start, holiday_end=None) -> str:
     last_ds  = real_last_date.strftime("%-m/%-d")
     date_range = f"{first_ds}～{last_ds}"
 
-    header = f"- 連假期間美股主要指數總表現（{date_range}）："
+    header = f"連假期間美股主要指數總表現（{date_range}）："
     return header + "\n" + "\n".join(lines)
 
 
@@ -834,14 +838,23 @@ def _parse_article(text: str):
             continue
         if line in ("顯示思路", "隱藏思路", "思路", "Show thinking", "Hide thinking"):
             continue
-        if re.search(r"\d{4}/\d{1,2}/\d{1,2}", line) and "！" in line:
-            cut = line.index("！") + 1
-            # 清除 markdown 後再設 title
-            title = re.sub(r'\*+', '', line[:cut]).strip()
-            body_start = i + 1   # body 從下一行開始，不含 title 行
+            
+        # 清理可能出現的贅字與 Markdown 星號
+        clean_line = re.sub(r'^(\*\*|標題：|【標題】|\*)+', '', line).strip()
+        
+        # 兼容全形「！」與半形「!」
+        if re.search(r"\d{4}/\d{1,2}/\d{1,2}", clean_line) and ("！" in clean_line or "!" in clean_line):
+            cut = clean_line.find("！")
+            if cut == -1:
+                cut = clean_line.find("!")
+            
+            # 擷取驚嘆號為止作為標題，並清除剩餘的 Markdown
+            title = re.sub(r'\*+', '', clean_line[:cut+1]).strip()
+            body_start = i + 1   # body 從下一行開始
             break
+            
         if i == 0 or all(not l.strip() for l in lines[:i]):
-            title = re.sub(r'\*+', '', line).strip()
+            title = re.sub(r'\*+', '', clean_line).strip()
             body_start = i + 1
             break
 
