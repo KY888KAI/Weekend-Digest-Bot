@@ -903,112 +903,74 @@ STOCK_TAG        = "加權指數"   # 發文預設標記指數
 
 
 async def _set_stock_tag(page: Page, tag_query: str = STOCK_TAG):
-    """在發文 modal 中設定股票/指數標記（加權指數）"""
+    """在發文 modal 中設定股票/指數標記（針對專屬標記 Modal 的精確打擊版）"""
     ts(f"設定股票標記：{tag_query}")
 
-    # 最優先：點擊「熱門標記」按鈕（modalTags__btn--popular）
-    popular_clicked = await page.evaluate("""(query) => {
-        const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-        const btns = Array.from(document.querySelectorAll('.modalTags__btn--popular'));
-        const btn = btns.find(el => isVis(el) && el.innerText && el.innerText.trim().includes(query));
-        if (btn) { btn.click(); return btn.innerText.trim().slice(0, 30); }
-        return null;
-    }""", tag_query)
-    if popular_clicked:
-        ts(f"  已點擊熱門標記按鈕：{popular_clicked}")
-        await page.wait_for_timeout(500)
-        return
+    # 1. 點擊「標個股」按鈕開啟專屬 Modal
+    try:
+        tag_btn = page.locator('.modalAttach__btn:has-text("標個股"), button:has-text("標個股")').first
+        if await tag_btn.count() > 0 and await tag_btn.is_visible():
+            await tag_btn.click()
+            ts("  已點擊「標個股」按鈕，等待專屬搜尋 Modal 展開...")
+            await page.wait_for_timeout(1000)
+    except Exception:
+        pass
 
-    # 次優先：Vue state 直接注入
-    injected = await page.evaluate("""(query) => {
-        for (const el of document.querySelectorAll('*')) {
-            const v = el.__vue__;
-            if (!v || !v.$data) continue;
-            const d = v.$data;
-            for (const key of ['stockSearchText', 'stockKeyword', 'searchStockText', 'stockSearch']) {
-                if (key in d) {
-                    d[key] = query;
-                    try { v.$emit('input', query); } catch(e) {}
-                    return 'vue:' + key;
-                }
-            }
-        }
-        return null;
-    }""", tag_query)
+    # 2. 精確鎖定 Modal 內的專屬搜尋框 (依據你提供的 HTML class 與 placeholder)
+    search_input = page.locator('.modalSearch__input[placeholder="輸入股票代號或名稱"]').last
+    
+    if await search_input.count() > 0 and await search_input.is_visible():
+        # 點擊並填入查詢字串
+        await search_input.click()
+        await page.wait_for_timeout(300)
+        await search_input.fill(tag_query)
+        ts(f"  已在專屬搜尋框輸入：{tag_query}，等待搜尋結果載入...")
+        
+        # 必須給 API 抓資料的時間
+        await page.wait_for_timeout(2000) 
 
-    if injected:
-        ts(f"  Vue注入：{injected}，等待搜尋結果...")
-        await page.wait_for_timeout(1000)
-        clicked = await page.evaluate("""(query) => {
-            const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-            for (const sel of ['li', '.cm-dropdown__item', '[role="option"]']) {
-                const found = Array.from(document.querySelectorAll(sel))
-                    .find(el => isVis(el) && el.innerText && el.innerText.includes(query));
-                if (found) { found.click(); return found.innerText.trim().slice(0, 30); }
-            }
-            return null;
-        }""", tag_query)
-        if clicked:
-            ts(f"  已選擇標記：{clicked}")
-            await page.wait_for_timeout(500)
-            return
-
-    # Fallback：DOM 輸入框搜尋
-    tag_input_sels = [
-        'input[placeholder*="股票"]',
-        'input[placeholder*="標記"]',
-        'input[placeholder*="搜尋股票"]',
-        '.messageModal__searchStock input',
-        '.stockSearch input',
-    ]
-    for sel in tag_input_sels:
-        try:
-            el = page.locator(sel).first
-            if await el.count() > 0 and await el.is_visible():
-                await el.fill(tag_query)
-                await page.wait_for_timeout(1000)
-                for opt_sel in [f'li:has-text("{tag_query}")', '.cm-dropdown__item', '[role="option"]']:
-                    try:
-                        opt_el = page.locator(opt_sel).first
-                        if await opt_el.count() > 0 and await opt_el.is_visible():
-                            text = await opt_el.inner_text()
-                            await opt_el.click()
-                            ts(f"  已選擇標記：{text[:30]}")
-                            await page.wait_for_timeout(500)
-                            return
-                    except Exception:
-                        pass
-                ts(f"  輸入了搜尋字但找不到下拉選項")
-                return
-        except Exception:
-            pass
-
-    # 最終 Fallback：點擊「標個股」按鈕 → 在 modalSearch__input 搜尋框輸入 → Enter
-    ts("  嘗試透過「標個股」按鈕開啟搜尋介面...")
-    tag_btn_clicked = await page.evaluate("""() => {
-        const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-        const btns = Array.from(document.querySelectorAll('.modalAttach__btn'));
-        const btn = btns.find(el => isVis(el) && el.innerText && el.innerText.includes('標個股'));
-        if (btn) { btn.click(); return true; }
-        return false;
-    }""")
-    if tag_btn_clicked:
-        await page.wait_for_timeout(800)
-        search_input = page.locator('input.modalSearch__input[type="search"]').first
-        if await search_input.count() > 0 and await search_input.is_visible():
-            await search_input.fill(tag_query)
-            await page.wait_for_timeout(600)
+        # 3. 嚴格鎖定專屬的搜尋結果列表 (.modalSearch__list)
+        # 這樣就能完全避開上面那個 <ul class="modalSearch__predictMenu"> (AI推薦區)
+        results_list = page.locator('.modalSearch__list li, .modalSearch__list .cm-dropdown__item, .modalSearch__list [role="option"]')
+        count = await results_list.count()
+        
+        clicked = False
+        if count > 0:
+            for i in range(count):
+                opt = results_list.nth(i)
+                if await opt.is_visible():
+                    text = await opt.inner_text()
+                    if tag_query in text:
+                        await opt.click()
+                        ts(f"  已精確點擊搜尋結果：{text.strip()}")
+                        clicked = True
+                        await page.wait_for_timeout(800)
+                        
+                        # 【關鍵】點擊結果後，這種滿版 Modal 通常需要點左上角的「返回箭頭」關閉
+                        try:
+                            return_btn = page.locator('button.modalSearch__return').first
+                            if await return_btn.is_visible():
+                                await return_btn.click()
+                                ts("  已點擊左上角返回按鈕，關閉標記視窗")
+                        except Exception:
+                            pass
+                        break
+        
+        if not clicked:
+            # 如果真的沒抓到列表，盲狙 Enter
             await search_input.press("Enter")
+            ts("  列表未出現明確匹配項目，已嘗試送出 Enter")
             await page.wait_for_timeout(800)
-            ts(f"  已透過「標個股」搜尋框標記：{tag_query}")
-            return
-        else:
-            ts("  「標個股」按鈕已點擊但找不到搜尋輸入框")
+            
+            # 盲狙後同樣嘗試關閉視窗
+            try:
+                return_btn = page.locator('button.modalSearch__return').first
+                if await return_btn.is_visible():
+                    await return_btn.click()
+            except Exception:
+                pass
     else:
-        ts("  未找到「標個股」按鈕")
-
-    ts("  未找到股票標記輸入框，跳過")
-
+        ts("  [錯誤] 找不到標個股的專屬搜尋輸入框 (.modalSearch__input)")
 
 async def _delete_attached_images(page: Page):
     """刪除發文 modal 中所有已附加的圖片（標記個股後自帶的圖片）"""
