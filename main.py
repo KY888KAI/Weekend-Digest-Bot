@@ -2073,11 +2073,21 @@ async def stage3_push(ctx: BrowserContext, push_content: str, deeplink: str):
         }
         if (errors.length) return { status: 'error', msg: errors.join(' | ') };
 
-        // 2. 偵測 toast / notification 成功訊息
+        // 2. 偵測 toast / notification 成功訊息與例外錯誤
+        const allMessages = document.querySelectorAll('.cm-message, .el-message, .el-notification');
+        for (const msg of Array.from(allMessages)) {
+            if (isVis(msg)) {
+                const t = msg.innerText?.trim() || "";
+                // 如果彈出訊息包含這些負面字眼，絕對是錯誤
+                if (t.includes('失敗') || t.includes('有誤') || t.includes('錯誤')) {
+                    return { status: 'error', msg: t.slice(0, 60) };
+                }
+            }
+        }
+
         const successSels = [
             '.cm-message--success', '.el-message--success',
-            '.cm-notification--success', '[class*="success"]',
-            '.cm-message', '.el-message',
+            '.cm-notification--success', '[class*="success"]'
         ];
         for (const sel of successSels) {
             const el = document.querySelector(sel);
