@@ -1805,58 +1805,50 @@ async def _get_scheduled_article_id(page: Page) -> str:
 async def _cm_select_by_label(page: Page, label_text: str, option_text: str) -> bool:
     """
     在推播表單中找到對應 label 的 cm-select 並選擇指定選項。
-    流程：點擊下拉開啟 → 輸入篩選字 → 點擊匹配選項。
+    使用嚴格的 Locator，確保輸入在正確的格子。
     """
     ts(f"  選擇「{label_text}」→「{option_text}」")
     try:
-        # 找到該 label 所在的 formItem，再往下找 cm-select__input
-        clicked_input = await page.evaluate("""([label, option]) => {
-            const items = Array.from(document.querySelectorAll('.cm-formItem'));
-            const item = items.find(el => el.innerText.includes(label));
-            if (!item) return 'no-item';
-            const selectInput = item.querySelector('.cm-select__input');
-            if (!selectInput) return 'no-select';
-            selectInput.click();
-            return 'clicked';
-        }""", [label_text, option_text])
-        if clicked_input != 'clicked':
-            ts(f"    找不到 cm-select（{clicked_input}），跳過")
+        # 找到包含 label 的 formItem (嚴謹比對)
+        form_item = page.locator('.cm-formItem').filter(has_text=re.compile(f"^{label_text}")).first
+        if await form_item.count() == 0:
+            form_item = page.locator('.cm-formItem').filter(has_text=label_text).first
+            
+        if await form_item.count() == 0:
+            ts(f"    找不到「{label_text}」欄位")
             return False
 
-        await page.wait_for_timeout(600)
-
-        # 嘗試在已展開的下拉中輸入篩選字
-        await page.evaluate("""(text) => {
-            const inp = document.querySelector('.cm-select__defaultInput:not([placeholder]),' +
-                '.cm-popup .cm-select__defaultInput, .cm-virtual-list input');
-            if (inp && document.activeElement !== inp) inp.focus();
-        }""", option_text)
-        focused_input = page.locator(
-            '.cm-popup .cm-select__defaultInput, .cm-virtual-list input, .cm-select__defaultInput'
-        ).last
-        if await focused_input.count() > 0:
-            await focused_input.fill(option_text, force=True)
+        input_locator = form_item.locator('.cm-select__defaultInput').first
+        if await input_locator.count() > 0:
+            # 點擊輸入框
+            await input_locator.click()
             await page.wait_for_timeout(500)
+            
+            # 填寫篩選文字
+            await input_locator.fill("")
+            await page.wait_for_timeout(200)
+            await input_locator.fill(option_text)
+            await page.wait_for_timeout(1500)  # 等待下拉選單過濾結果出現
 
-        # 點擊匹配選項（常見 class：cm-option、cm-select-dropdown__item 等）
-        clicked_opt = await page.evaluate("""(text) => {
-            const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-            const sels = ['.cm-option', '.cm-select-dropdown__item', '[class*="option"]',
-                          '.cm-virtual-list__item', 'li[class*="item"]'];
-            for (const sel of sels) {
-                const opt = Array.from(document.querySelectorAll(sel))
-                    .find(el => isVis(el) && el.innerText && el.innerText.includes(text));
-                if (opt) { opt.click(); return opt.innerText.trim().slice(0, 40); }
-            }
-            return null;
-        }""", option_text)
-        if clicked_opt:
-            ts(f"    已選擇：{clicked_opt}")
-            await page.wait_for_timeout(400)
-            return True
-
-        ts(f"    下拉選項中找不到「{option_text}」")
-        return False
+            # 點擊選項 (找全域可見的下拉選單選項)
+            options = page.locator('.cm-option, .cm-selectOption, .cm-select-dropdown__item, li[class*="item"]')
+            count = await options.count()
+            
+            for i in range(count):
+                opt = options.nth(i)
+                if await opt.is_visible():
+                    text = await opt.inner_text()
+                    if option_text in text:
+                        await opt.click()
+                        ts(f"    已選擇：{text.strip()}")
+                        await page.wait_for_timeout(400)
+                        return True
+            
+            ts(f"    下拉選項中找不到「{option_text}」")
+            return False
+        else:
+            ts(f"    「{label_text}」內找不到下拉輸入框")
+            return False
     except Exception as e:
         ts(f"    cm-select 操作失敗：{e}")
         return False
@@ -1995,11 +1987,16 @@ async def stage3_push(ctx: BrowserContext, push_content: str, deeplink: str):
     except Exception:
         ts("  等待表單逾時，繼續嘗試...")
 
-    # ── 選擇推播 APP（cm-select 自定義下拉） ──────────────────
-    ts("選擇推播 APP：ETF選股...")
-    await _cm_select_by_label(page, "推播APP", "ETF")
+    # ── 選擇推播團隊 ──────────────────────────────────────────
+    ts("選擇推播團隊：所有團隊...")
+    await _cm_select_by_label(page, "推播團隊", "所有團隊")
     await page.wait_for_timeout(500)
 
+    # ── 選擇推播 APP（cm-select 自定義下拉） ──────────────────
+    ts("選擇推播 APP：194. ETF選股...")
+    await _cm_select_by_label(page, "推播APP", "194. ETF選股")
+    await page.wait_for_timeout(500)
+    
     # ── 推播標題 ──────────────────────────────────────────────
     ts(f"輸入推播標題：{PUSH_TITLE}")
     await _fill(page, [
@@ -2060,10 +2057,10 @@ async def stage3_push(ctx: BrowserContext, push_content: str, deeplink: str):
     result = await page.evaluate("""() => {
         const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
 
-        // 1. 偵測表單驗證紅字錯誤
+        // 1. 偵測表單驗證紅字錯誤 (移除了靜態的 .text-danger-basic 避免誤抓常駐提示)
         const errorSels = [
-            '.cm-formItem__error', '.cm-input--error', '[class*="is-error"]',
-            '.text-danger-basic', '[class*="error-msg"]',
+            '.cm-formItem__error', '.cm-formItem__errorMsg', '.cm-input--error', '[class*="is-error"]',
+            '[class*="error-msg"]',
         ];
         const errors = [];
         for (const sel of errorSels) {
