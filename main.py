@@ -694,17 +694,16 @@ async def _gemini_get_last_response(page: Page, timeout_s: int = 180) -> str:
         'button[aria-label*="stop generating"]'
     )
 
-    # 記錄送出前已有幾個回應，用來偵測「新回應出現」
+    # 擴大監控的標籤範圍，預防 Google 改名
     pre_count = await page.evaluate(
-        "() => document.querySelectorAll('model-response').length"
+        "() => document.querySelectorAll('model-response, gemini-message, .message-content, .markdown').length"
     )
 
-    # 等待：stop 按鈕出現 OR 新的 model-response 出現（短 prompt 可能沒有 stop 按鈕）
     started = False
     for _ in range(120):  # 最多等 60 秒
         has_stop = await page.locator(stop_sel).count() > 0
         cur_count = await page.evaluate(
-            "() => document.querySelectorAll('model-response').length"
+            "() => document.querySelectorAll('model-response, gemini-message, .message-content, .markdown').length"
         )
         if has_stop or cur_count > pre_count:
             started = True
@@ -725,50 +724,30 @@ async def _gemini_get_last_response(page: Page, timeout_s: int = 180) -> str:
 
     await page.wait_for_timeout(2_000)
 
+    # 增強版：多階層、多標籤的文字擷取邏輯
     text = await page.evaluate("""() => {
         const SKIP = new Set(['顯示思路','隱藏思路','思路','Show thinking','Hide thinking']);
-
-        const allResponses = document.querySelectorAll('model-response');
-        if (allResponses.length > 0) {
-            const last = allResponses[allResponses.length - 1];
-
-            // 優先嘗試 message-content（最可靠，不含思路 UI）
-            const msgContent = last.querySelector(
-                'message-content, .message-content, [class*="response-text"], .markdown'
-            );
-            if (msgContent) {
-                const clone = msgContent.cloneNode(true);
+        
+        // 加入所有 Google 可能替換的 class 與 tag
+        const candidates = document.querySelectorAll('model-response, gemini-message, .message-content, .markdown, .response-text');
+        
+        if (candidates.length > 0) {
+            // 從最後一個（最新的回應）開始找
+            for (let i = candidates.length - 1; i >= 0; i--) {
+                const node = candidates[i];
+                const clone = node.cloneNode(true);
+                
+                // 拔除擾亂視聽的思路區塊與按鈕
                 clone.querySelectorAll(
                     'thought-chunk, details, summary, [class*="thought"], [class*="thinking"],' +
                     'button, [role="button"], [aria-label]'
                 ).forEach(el => el.remove());
+                
                 const txt = clone.innerText.trim();
-                if (txt && !SKIP.has(txt)) return txt;
-            }
-
-            // fallback：整個 model-response，逐行過濾思路文字
-            const clone = last.cloneNode(true);
-            clone.querySelectorAll(
-                'thought-chunk, details, summary, [class*="thought"], [class*="thinking"],' +
-                'button, [role="button"]'
-            ).forEach(el => el.remove());
-            const lines = clone.innerText.split('\\n')
-                .map(l => l.trim())
-                .filter(l => l && !SKIP.has(l));
-            const txt = lines.join('\\n').trim();
-            if (txt) return txt;
-        }
-
-        // 最終 fallback
-        for (const sel of [
-            '[data-message-author-role="model"]',
-            '.conversation-turn:last-child .response-content',
-            '.response-container',
-        ]) {
-            const els = document.querySelectorAll(sel);
-            if (els.length > 0) {
-                const txt = els[els.length - 1].innerText.trim();
-                if (txt && !new Set(['顯示思路','隱藏思路']).has(txt)) return txt;
+                // 確保抓到的不是空殼或單純的 UI 文字
+                if (txt && !SKIP.has(txt) && txt.length > 10) { 
+                    return txt;
+                }
             }
         }
         return '';
@@ -777,7 +756,13 @@ async def _gemini_get_last_response(page: Page, timeout_s: int = 180) -> str:
     if text:
         return text
 
-    raise RuntimeError("無法擷取 Gemini 回應內容")
+    # 殺手鐧：如果真的抓不到，呼叫你寫好的除錯工具拍照存證
+    try:
+        await _save_debug_snapshot(page, "gemini_extract_failed")
+    except Exception:
+        pass
+        
+    raise RuntimeError("無法擷取 Gemini 回應內容（已儲存畫面截圖至 debug_snapshots 資料夾）")
 
 async def _save_cookies(ctx: BrowserContext, cookie_file: Path):
     cookies = await ctx.cookies()
