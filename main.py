@@ -1299,32 +1299,50 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
     await page.wait_for_timeout(400)
     await _delete_attached_images(page)
 
-    # ── 輸入內文：native value setter + Vue model 同步 ──
+    # ── 輸入內文：捨棄 Vue 注入與 native setter，改用純鍵盤模擬貼上 ──
     # 放在標個股／刪圖片之後，避免標記操作干擾已輸入的內文
     ts("輸入內文...")
-    body_r = await page.evaluate("""(text) => {
-        // 1. 找到可見的 inputValue textarea
-        const el = Array.from(document.querySelectorAll('textarea[name="inputValue"]'))
-                       .find(e => e.getBoundingClientRect().width > 0);
-        if (el) {
-            // native value setter 可繞過 Vue 的 property descriptor
-            const setter = Object.getOwnPropertyDescriptor(
-                window.HTMLTextAreaElement.prototype, 'value').set;
-            setter.call(el, text);
-            el.dispatchEvent(new Event('input',  { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        // 2. Vue model 直接注入
-        for (const domEl of document.querySelectorAll('*')) {
-            const vue = domEl.__vue__;
-            if (vue && vue.$data && 'inputValue' in vue.$data) {
-                vue.$data.inputValue = text;
-                return 'vue-set:inputValue ✓';
+    try:
+        # 1. 確保找到正確的 textarea 並讓它獲得焦點 (focus)
+        focused = await page.evaluate("""() => {
+            const el = Array.from(document.querySelectorAll('textarea[name="inputValue"]'))
+                           .find(e => e.getBoundingClientRect().width > 0);
+            if (el) {
+                el.focus();
+                // 全選清空，確保不會跟之前殘留的文字混在一起
+                el.select();
+                return true;
             }
-        }
-        return el ? 'dom-only' : 'not-found';
-    }""", body)
-    ts(f"  內文輸入：{body_r}")
+            return false;
+        }""")
+
+        if focused:
+            await page.wait_for_timeout(300)
+            
+            # 2. 使用 Playwright 原生的 insert_text (完美模擬真實鍵盤貼上行為)
+            # 這能100%觸發 Vue 預期的原生事件，且保留所有空行與特殊符號
+            await page.keyboard.insert_text(body)
+            await page.wait_for_timeout(500)
+            
+            # 3. 補發一個 input 事件，確保 Vue 的 v-model 有確實更新狀態
+            await page.evaluate("""() => {
+                const el = document.activeElement;
+                if(el) {
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }""")
+            ts("  內文輸入：鍵盤模擬貼上 ✓")
+            
+            # (選擇性 DEBUG) 印出前幾行確認內容
+            preview = "\n".join(body.splitlines()[:3])
+            ts(f"  [預覽] 寫入內容前三行：\n{preview}")
+            
+        else:
+            ts("  內文輸入：找不到可用的 textarea")
+            
+    except Exception as e:
+        ts(f"  內文輸入發生錯誤：{e}")
     await page.wait_for_timeout(400)
 
     # ── 發文模式選擇 ──────────────────────────
