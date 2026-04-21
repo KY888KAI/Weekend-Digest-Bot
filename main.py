@@ -72,24 +72,27 @@ GEMINI_PROMPT_1_HOLIDAY = (
 GEMINI_PROMPT_1_TEMPLATE = (
     "{intro}"
     "【發文日期】今天是 {publish_date}，文章標題首句日期請使用此日期。\n"
-    "首句標題字數限制30字以內。\n"
-    "以下為純格式範例（日期與數字皆為虛構，僅供參考文章結構，請嚴格模仿此排版與分隔線）：\n\n"
+    "首句標題字數限制30字以內。\n\n"
+    "【排版格式絕對要求】：\n"
+    "1. 每一段之間，必須插入「單獨一行」且內容「只有一個減號 -」，前後都要換行。\n"
+    "2. 嚴格遵守下方範例的減號位置，不要擅自增減或改變格式。\n\n"
+    "以下為純格式範例（請嚴格模仿此結構）：\n\n"
     "2026/3/1 通膨高預期、以伊爆衝突，連假事件一次看！\n"
     "幫大家快速複習這幾天美股表現與國際大事！\n"
-    "-\n" 
+    "-\n" # 👈 這裡就是 \n-\n
     "週五美股主要指數表現（2/27）：\n"
     "📍標普500指數：下跌0.43%\n"
     "📍道瓊工業指數：下跌1.05%\n"
     "📍那斯達克綜合指數：下跌0.92%\n"
     "📍費城半導體指數：下跌1.21%\n"
-    "-\n"
+    "-\n" # 👈 這裡也是 \n-\n
     "連假期間重點事件與市場影響：\n"
     "● 2/27 經濟數據 + AI疑慮雙重壓力\n"
     "➤ 1月PPI通膨大幅超預期（整體+0.5%、核心+0.8%），降息希望再降溫\n"
     "➤ AI對就業與商業模式的破壞性疑慮升溫，科技與金融股重挫\n"
     "● 2/28～3/1 美以對伊朗發動大規模軍事攻擊\n"
     "➤ 伊朗立即報復，發射導彈攻擊以色列本土與美國在中東軍事基地\n"
-    "-\n"
+    "-\n" # 👈 最後一段前的分隔
     "整體市場情緒明顯避險為主。連假前本來就有通膨+AI疑慮，週末再爆發中東衝突，{week_ref}波動可能加大！\n\n"
     "文案修飾規則：\n"
     "1. 名詞避免使用中國常用說法，例如：❌特朗普 ⭕川普　❌霍爾木茲海峽 ⭕荷姆茲海峽\n"
@@ -139,7 +142,7 @@ def _fetch_single_day() -> str:
     else:
         wd, ds = "週五", "N/A"
 
-    header = f"{wd}美股主要指數表現（{ds}）："
+    header = f"{wd}美股主要指數表現（{ds}）：" 
     return header + "\n" + "\n".join(lines)
 
 def _fetch_holiday_days(holiday_start, holiday_end=None) -> str:
@@ -809,38 +812,27 @@ def _clean_body(text: str) -> str:
 
 def _parse_article(text: str):
     lines = text.splitlines()
+    if not lines: return "", ""
+    
+    # 1. 識別標題：找包含日期與「！」的那一行
     title = ""
-    body_start = 0
-
-    for i, raw in enumerate(lines):
-        line = raw.strip()
-        if not line:
-            continue
-        if line in ("顯示思路", "隱藏思路", "思路", "Show thinking", "Hide thinking"):
-            continue
-            
-        # 清理可能出現的贅字與 Markdown 星號
-        clean_line = re.sub(r'^(\*\*|標題：|【標題】|\*)+', '', line).strip()
-        
-        # 兼容全形「！」與半形「!」
-        if re.search(r"\d{4}/\d{1,2}/\d{1,2}", clean_line) and ("！" in clean_line or "!" in clean_line):
-            cut = clean_line.find("！")
-            if cut == -1:
-                cut = clean_line.find("!")
-            
-            # 擷取驚嘆號為止作為標題，並清除剩餘的 Markdown
-            title = re.sub(r'\*+', '', clean_line[:cut+1]).strip()
-            body_start = i + 1   # body 從下一行開始
+    body_start_idx = 0
+    for i, line in enumerate(lines):
+        clean_line = line.strip().replace("*", "")
+        if re.search(r"\d{4}/\d{1,2}/\d{1,2}", clean_line) and "！" in clean_line:
+            title = clean_line
+            body_start_idx = i + 1
             break
             
-        if i == 0 or all(not l.strip() for l in lines[:i]):
-            title = re.sub(r'\*+', '', clean_line).strip()
-            body_start = i + 1
-            break
-
-    body = _clean_body("\n".join(lines[body_start:]).strip()) if body_start > 0 else _clean_body(text.strip())
+    # 如果找不到特定格式，預設第一行為標題
     if not title:
-        title = lines[0].strip() if lines else ""
+        title = lines[0].strip().replace("*", "")
+        body_start_idx = 1
+
+    # 2. 組合內文，並透過 _clean_body 清理
+    raw_body = "\n".join(lines[body_start_idx:]).strip()
+    body = _clean_body(raw_body)
+    
     return title, body
 
 def _clean_push_text(raw: str) -> str:
