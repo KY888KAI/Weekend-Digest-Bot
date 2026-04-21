@@ -425,15 +425,28 @@ async def main():
                 ts(f"【快取】重用上次 Gemini 產出（{cache_file.name}，標題：{title[:20]}...）")
                 cache_used = True
             if not cache_used:
+                # 1. 抓取 Gemini 即時產出的內容
                 title, body, push_text = await stage1_gemini(gemini_ctx, run_mode, holiday_start, holiday_end)
-                body = _enforce_dashes(body)
+                
+                # 2. 【核心步驟】不管什麼模式，發文前一律強制暴力修復排版
+                # 這行就是代替你「手動改 JSON」的那雙手
+                body = _enforce_dashes(body) 
+                
+                # 3. 只有在測試模式時才會存入 stage1_cache 供你參考
                 if test_mode or test_holiday:
                     cache_file.write_text(
                         json.dumps({"title": title, "body": body, "push_text": push_text},
                                    ensure_ascii=False, indent=2), "utf-8"
                     )
                     ts(f"【快取】已儲存 Gemini 產出至 {cache_file.name}")
+                else:
+                    # 4. 【新增】在正式模式下，我們把發出去的內容存成一個 debug 檔案
+                    # 這樣萬一排版還是不對，你可以看這個檔案，不用猜 Gemini 吐了什麼
+                    with open(BASE_DIR / "last_production_sent.txt", "w", encoding="utf-8") as f:
+                        f.write(f"TITLE: {title}\n\nBODY:\n{body}")
+                    ts("【正式模式】最終發文內容已備份至 last_production_sent.txt")
 
+            # 最後，body 已經是被 Python 修復過的完美版本，直接送去發文
             article_id = await stage2_post(cmoney_ctx, title, body, test_mode=(test_mode or test_holiday))
 
             deeplink = DEEPLINK_TPL.format(article_id)
@@ -1093,6 +1106,25 @@ async def _close_annoying_modals(page: Page, max_rounds: int = 3):
 async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: bool = False) -> str:
     mode_label = "【排程發文-測試】" if test_mode else "【立即發文】"
     ts(f"─── 第二階段：CMoney 同學會發文 開始 {mode_label} ───")
+    # --- 👇 新增：發文前強制暴力排版 👇 ---
+    import re
+    # 1. 不管前面黏著什麼鬼東西，只要遇到這四個關鍵字，強制在前面劈開並加上換行與減號
+    body = re.sub(
+        r"\s*(週五美股主要指數表現|連假期間美股主要指數總表現|連假期間重點事件與市場影響|整體市場情緒)", 
+        r"\n\n-\n\1", 
+        body
+    )
+    # 2. 清理多餘的減號與空行，確保排版乾淨俐落 (\n-\n)
+    body = re.sub(r'\n+\s*-\s*\n+', '\n-\n', body)
+    body = body.strip()
+    
+    # 3. 防呆：如果最開頭不小心被塞了減號，把它削掉
+    if body.startswith("-\n"):
+        body = body[2:].strip()
+    
+    ts("  [系統] 已在發文前強制執行版面重構 (插入分隔線)")
+    # --- 👆 新增：發文前強制暴力排版 👆 ---
+    
     page = await ctx.new_page()
 
     if not CMONEY_COOKIE.exists():
