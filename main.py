@@ -1652,75 +1652,45 @@ async def _select_schedule_post(page: Page) -> str:
                 return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
             };
 
-            // ★ 關鍵：只在可見的 overlay/modal 容器內操作，不碰背景頁面按鈕
-            const OVERLAY_SEL = [
-                '.dialog', '.cm-modal', '[role="dialog"]', '.el-dialog',
-                '.modal-content', '.modal-body', '.cm-dialog',
-                '.modalPredictStock', '.modalImages', '.guide'
-            ].join(', ');
-            const overlays = Array.from(document.querySelectorAll(OVERLAY_SEL)).filter(isVis);
+            // 鎖定 AI 推薦標籤的彈窗容器
+            const predictModal = document.querySelector('.modalPredictStock');
+            if (predictModal) {
+                // 找到該彈窗所屬的 dialog 容器
+                const dialogContainer = predictModal.closest('.dialog__content');
+                if (dialogContainer) {
+                    // 1. 優先尋找並點擊「叉叉」按鈕關閉
+                    const closeBtn = dialogContainer.querySelector('button[aria-label="Close"], .dialog__closeBtn');
+                    if (closeBtn && isVis(closeBtn)) {
+                        closeBtn.click();
+                        return 'AI彈窗:直接關閉(叉叉)';
+                    }
 
-            if (overlays.length === 0) return null;
-
-            for (const ov of overlays) {
-                const btns = Array.from(ov.querySelectorAll('button, [role="button"]')).filter(b => isVis(b));
-                if (btns.length === 0) continue;
-
-                // 0. 救命機制：不能關掉「編輯中」的視窗
-                const continueEdit = btns.find(b => b.innerText && b.innerText.trim() === '繼續編輯');
-                if (continueEdit) { continueEdit.click(); return '繼續編輯'; }
-
-                // 1. AI推薦股標彈窗：點「發佈文章」完成提交（最優先！）
-                const publishBtn = btns.find(b =>
-                    b.innerText && b.innerText.trim().includes('發佈文章') &&
-                    !b.classList.contains('messageModal__submit')
-                );
-                if (publishBtn) {
-                    // 暴力清除所有 AI 推薦的勾選：抓取最外層以確保 click 能觸發 Vue 事件
-                    const options = Array.from(ov.querySelectorAll('label.cm-checkbox, label.el-checkbox, .cm-checkbox'));
-                    options.forEach(opt => {
-                        const text = opt.innerText || '';
-                        const isTaiex = text.includes('加權指數');
-                        
-                        // 嚴格判斷是否已被勾選 (涵蓋 input 屬性與外層 class)
-                        const isChecked = opt.classList.contains('is-checked') || 
-                                          opt.querySelector('input:checked, .cm-checkbox__input--checked') !== null;
-                        
-                        // 不是加權指數且被打勾 -> 點擊取消
-                        if (!isTaiex && isChecked) {
-                            try { opt.click(); } catch(e) {}
-                        } 
-                        // 如果 AI 剛好有推加權指數但沒勾 -> 點擊勾選
-                        else if (isTaiex && !isChecked) {
-                            try { opt.click(); } catch(e) {}
+                    // 2. 如果沒看到叉叉，嘗試取消所有已勾選的標籤 (例如「半導體」)
+                    const selectedTags = predictModal.querySelectorAll('.modalPredictStock__tag--selected');
+                    selectedTags.forEach(tag => {
+                        // 如果標籤文字不是「加權指數」，就點擊取消它
+                        if (!tag.innerText.includes('加權指數')) {
+                            tag.click();
                         }
                     });
 
-                    // 處理完勾選狀態後，按下發佈
-                    publishBtn.click(); 
-                    return 'PredictStock:發佈文章(已清除無關的AI標記)'; 
-                }
-
-                // 2. 確認類按鈕（排除主發文按鈕；不自動全部標記股票，避免誤標半導體）
-                const CONFIRM_TEXTS = ['確認', '確定', '繼續', '同意'];
-                for (const txt of CONFIRM_TEXTS) {
-                    const b = btns.find(btn =>
-                        btn.innerText && btn.innerText.trim() === txt &&
-                        !btn.classList.contains('messageModal__submit')
-                    );
-                    if (b) { b.click(); return 'Confirm:' + txt; }
-                }
-
-                // 3. 關閉非主編輯視窗的 X 按鈕（主編輯視窗含 .messageModal__submit，不碰）
-                const hasSubmit = ov.querySelector('.messageModal__submit') !== null;
-                if (!hasSubmit) {
-                    const xBtn = btns.find(b =>
-                        b.getAttribute('aria-label') === 'Close' ||
-                        b.classList.contains('dialog__closeBtn')
-                    );
-                    if (xBtn) { xBtn.click(); return 'XClose:' + (ov.className||'').slice(0,30); }
+                    // 3. 最後按下「發佈文章」按鈕
+                    const publishBtn = dialogContainer.querySelector('.modalPredictStockFoot__btn');
+                    if (publishBtn && isVis(publishBtn)) {
+                        publishBtn.click();
+                        return 'AI彈窗:清空標籤後發佈';
+                    }
                 }
             }
+
+            // 處理一般的確認彈窗
+            const CONFIRM_TEXTS = ['確認', '確定', '了解'];
+            const allBtns = Array.from(document.querySelectorAll('button, .btn')).filter(isVis);
+            for (const txt of CONFIRM_TEXTS) {
+                const b = allBtns.find(btn => btn.innerText && btn.innerText.trim() === txt);
+                if (b) { b.click(); return 'Confirm:' + txt; }
+            }
+
             return null;
         }""")
 
