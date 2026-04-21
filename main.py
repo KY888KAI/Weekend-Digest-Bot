@@ -683,7 +683,21 @@ async def _gemini_send(page: Page, message: str):
     )
     await page.wait_for_timeout(500)
 
-    await page.keyboard.press("Enter")
+    # ==========================================
+    # 以下為更新後的送出邏輯：先點擊送出按鈕，失敗才按 Enter
+    # ==========================================
+    clicked = await page.evaluate("""() => {
+        const btn = document.querySelector('button[aria-label*="Send"], button[aria-label*="傳送"], .send-button, [data-test-id="send-button"]');
+        if (btn && !btn.disabled) {
+            btn.click();
+            return true;
+        }
+        return false;
+    }""")
+    
+    if not clicked:
+        await page.keyboard.press("Enter")
+        
     await page.wait_for_timeout(1_000)
 
 async def _gemini_get_last_response(page: Page, timeout_s: int = 180) -> str:
