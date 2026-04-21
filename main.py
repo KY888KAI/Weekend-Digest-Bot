@@ -71,13 +71,13 @@ GEMINI_PROMPT_1_HOLIDAY = (
 # 共用的後半段 prompt
 GEMINI_PROMPT_1_TEMPLATE = (
     "{intro}"
-    "【發文日期】今天是 {publish_date}，文章標題首句日期請使用此日期。\n"
+    "**【發文日期】今天是 {publish_date}，文章標題首句日期請使用此日期。**\n"
     "首句標題字數限制30字以內。\n"
     "【排版嚴格規定】\n"
-    "1. 標題行「必須」在前後加上雙星號進行加粗，例如：**2026/3/1 ...！**\n"
-    "2. 內文嚴禁出現 ## 或 ** 符號，只能使用純文字、換行與以下指定符號。\n"
+    "1. 標題行「必須」使用粗體語法，例如：**2026/3/1 ...！**\n"
+    "2. 內文嚴禁使用粗體 (**)、斜體 (*) 或標題符號 (##)，只能有純文字和換行。\n"
     "3. 分隔線請使用單一連字號 (-) 獨立成行。\n"
-    "4. 只能使用 📍、●、➤ 這三個符號，不准自行發明其他符號或 emoji。\n\n"
+    "4. 只能使用 📍、●、➤ 這三個符號，不准自行發明其他 emoji。\n\n"
     "請「嚴格」依照以下骨架輸出，中括號 [] 內為需要你填寫的真實數據（輸出時不要印出中括號）：\n\n"
     "**[標題：含日期的30字內一句話]**\n"
     "幫大家快速複習這幾天美股表現與國際大事！\n"
@@ -512,7 +512,10 @@ async def stage1_gemini(ctx: BrowserContext, run_mode: str, holiday_start, holid
 
     market_block = _fetch_market_data(run_mode, holiday_start, holiday_end)
 
-    publish_date = datetime.now().strftime("%-Y/%-m/%-d")
+   # 修正：連假模式下標題應使用連假最後一天的日期，而非今天
+    target_dt = holiday_end if run_mode == "holiday" and holiday_end else datetime.now()
+    publish_date = target_dt.strftime("%-Y/%-m/%-d")
+    
     week_ref = "下週" if run_mode == "sunday" else "本週"
 
     if run_mode == "sunday":
