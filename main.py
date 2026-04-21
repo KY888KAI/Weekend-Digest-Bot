@@ -1269,28 +1269,26 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
     ts(f"  {title_r}")
     await page.wait_for_timeout(400)
 
-    # ── 輸入內文：DOM + Vue model 同步 ──
+  # ── 輸入內文：模擬真實使用者鍵盤貼上（解決跑版問題） ──
     ts("輸入內文...")
-    body_r = await page.evaluate("""(text) => {
-        // 1. DOM
-        const el = Array.from(document.querySelectorAll('textarea[name="inputValue"]'))
-                       .find(e => e.getBoundingClientRect().width > 0);
-        if (el) {
-            el.value = text;
-            el.dispatchEvent(new Event('input',  { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        // 2. Vue model
-        for (const domEl of document.querySelectorAll('*')) {
-            const vue = domEl.__vue__;
-            if (vue && 'inputValue' in (vue.$data || {})) {
-                vue.$data.inputValue = text;
-                return 'vue-set:inputValue ✓';
-            }
-        }
-        return el ? 'dom-only' : 'not-found';
-    }""", body)
-    ts(f"  {body_r}")
+    try:
+        # 找到畫面上可見的內文輸入框
+        textarea = page.locator('textarea[name="inputValue"]').filter(state="visible").first
+        if await textarea.count() > 0:
+            await textarea.click()
+            await page.wait_for_timeout(200)
+            
+            # 使用 insert_text 模擬真實貼上，確保 Vue 的雙向綁定能完整接收並保留 \n 換行符號
+            await page.keyboard.insert_text(body)
+            
+            # 觸發一下 input 事件以防萬一
+            await textarea.dispatchEvent("input")
+            ts("  內文輸入完成 ✓ (via keyboard.insert_text)")
+        else:
+            ts("  [警告] 找不到可見的內文輸入框")
+    except Exception as e:
+        ts(f"  內文輸入發生錯誤：{e}")
+        
     await page.wait_for_timeout(400)
 
     # ── 設定股票標記（加權指數）──
