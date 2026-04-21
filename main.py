@@ -1713,7 +1713,34 @@ async def _select_schedule_post(page: Page) -> str:
                     b.innerText && b.innerText.trim().includes('發佈文章') &&
                     !b.classList.contains('messageModal__submit')
                 );
-                if (publishBtn) { publishBtn.click(); return 'PredictStock:發佈文章'; }
+                if (publishBtn) {
+                    // 終極鎖定：只留「加權指數」，其餘全部取消勾選
+                    const options = Array.from(ov.querySelectorAll('label, .cm-checkbox, .el-checkbox'));
+                    options.forEach(opt => {
+                        const text = opt.innerText || '';
+                        if (!text.trim()) return;
+                        
+                        const isTaiex = text.includes('加權指數');
+                        
+                        // 檢查該選項目前的狀態（是否已打勾）
+                        const input = opt.querySelector('input[type="checkbox"]');
+                        const isChecked = input ? input.checked : (opt.classList.contains('is-checked') || opt.querySelector('.cm-checkbox__input--checked, .is-checked') !== null);
+                        
+                        // 決策邏輯：
+                        // 如果「不是加權指數」但「被勾選了」 -> 點擊它取消勾選
+                        if (!isTaiex && isChecked) {
+                            try { opt.click(); } catch(e) {}
+                        } 
+                        // 如果「是加權指數」但「沒被勾選」 -> 點擊它勾起來
+                        else if (isTaiex && !isChecked) {
+                            try { opt.click(); } catch(e) {}
+                        }
+                    });
+
+                    // 處理完勾選狀態後，再點擊發佈
+                    publishBtn.click(); 
+                    return 'PredictStock:發佈文章(已強制鎖定加權指數)'; 
+                }
 
                 // 2. 確認類按鈕（排除主發文按鈕；不自動全部標記股票，避免誤標半導體）
                 const CONFIRM_TEXTS = ['確認', '確定', '繼續', '同意'];
