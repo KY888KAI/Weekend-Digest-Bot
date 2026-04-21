@@ -1314,9 +1314,10 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
             # 2. 使用 Playwright 原生的 insert_text
             await page.keyboard.insert_text(body)
 
-    # ── 輸入內文：捨棄 Vue 注入與 native setter，改用純鍵盤模擬貼上 ──
+   # ── 輸入內文：捨棄 Vue 注入與 native setter，改用純鍵盤模擬貼上 ──
     # 放在標個股／刪圖片之後，避免標記操作干擾已輸入的內文
     ts("輸入內文...")
+    focused = False  # <-- 預先宣告變數，防止 UnboundLocalError
     try:
         # 1. 確保找到正確的 textarea 並讓它獲得焦點 (focus)
         focused = await page.evaluate("""() => {
@@ -1330,36 +1331,45 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
             }
             return false;
         }""")
-
-        if focused:
-            await page.wait_for_timeout(300)
-            
-            # 2. 使用 Playwright 原生的 insert_text (完美模擬真實鍵盤貼上行為)
-            # 這能100%觸發 Vue 預期的原生事件，且保留所有空行與特殊符號
-            await page.keyboard.insert_text(body)
-            await page.wait_for_timeout(500)
-            
-            # 3. 補發一個 input 事件，確保 Vue 的 v-model 有確實更新狀態
-            await page.evaluate("""() => {
-                const el = document.activeElement;
-                if(el) {
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            }""")
-            ts("  內文輸入：鍵盤模擬貼上 ✓")
-            
-            # (選擇性 DEBUG) 印出前幾行確認內容
-            preview = "\n".join(body.splitlines()[:3])
-            ts(f"  [預覽] 寫入內容前三行：\n{preview}")
-            
-        else:
-            ts("  內文輸入：找不到可用的 textarea")
-            
     except Exception as e:
-        ts(f"  內文輸入發生錯誤：{e}")
-    await page.wait_for_timeout(400)
+        ts(f"  尋找輸入框發生錯誤：{e}")
 
+    # 確保 focused 有成功被設為 True 才執行貼上動作
+    if focused:
+        await page.wait_for_timeout(300)
+        
+        # --- 加入這段來保證所見即所得 ---
+        ts("=" * 40)
+        ts("【即將貼上到 CMoney 的最終內文預覽】")
+        for line in body.splitlines():
+            ts(f"| {line}")  
+        ts("=" * 40)
+        # -------------------------------
+        
+        # 2. 使用 Playwright 原生的 insert_text 貼上內容
+        await page.keyboard.insert_text(body)
+        await page.wait_for_timeout(500)
+        
+        # 3. 【關鍵假動作】真實輸入一個空白鍵，再退格刪除，強制觸發 Vue 的鍵盤監聽事件
+        await page.keyboard.press("Space")
+        await page.wait_for_timeout(100)
+        await page.keyboard.press("Backspace")
+        await page.wait_for_timeout(500)
+        
+        # 4. 補發一個 input 事件，多重保險
+        await page.evaluate("""() => {
+            const el = document.activeElement;
+            if(el) {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }""")
+        
+        ts("  內文輸入：鍵盤模擬貼上與狀態喚醒 ✓")
+    else:
+        ts("  內文輸入：找不到可用的 textarea，無法貼上內文")
+        
+    await page.wait_for_timeout(400)
     # ── 發文模式選擇 ──────────────────────────
     if test_mode:
         ts("【測試】點擊「立即發文」下拉 → 選擇「排程發文」...")
