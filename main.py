@@ -1887,35 +1887,55 @@ async def _cm_select_by_label(page: Page, label_text: str, option_text: str) -> 
 async def _set_cm_datepicker(page: Page, date_str: str, time_str: str) -> bool:
     """
     設定 cm-datePicker 的日期時間。
-    改用 Playwright 原生強制填值，避免 Vue 變數改版造成的 Invalid Time。
+    改用 Vue 狀態暴力注入 + 模擬打字，解決「請勿選擇過去時間」的錯誤。
     """
-    # 系統最容易看懂的格式通常是橫槓 (2026-04-21 20:25)
-    full_dash = date_str.replace("/", "-") + " " + time_str
-    ts(f"  使用 Playwright 強制填值設定推播時間：{full_dash}")
+    # 使用斜線格式，這是 CMoney 後台最常見的標準格式
+    full_val = f"{date_str} {time_str}"
+    ts(f"  正在嘗試填入推播時間：{full_val}")
 
     try:
-        # 鎖定推播時間的輸入框
-        time_input = page.locator('.cm-datePicker input.cm-input__defaultInput, input[placeholder*="日期"], input[placeholder*="請選擇日期"]').first
+        # 1. 找到輸入框並確保它出現
+        target = page.locator('.cm-datePicker input.cm-input__defaultInput, input[placeholder*="日期"]').first
+        await target.wait_for(state="visible", timeout=5000)
         
-        if await time_input.count() > 0:
-            await time_input.wait_for(state="visible", timeout=5000)
-            
-            # 點擊框框並強制覆蓋數值
-            await time_input.click()
-            await page.wait_for_timeout(300)
-            await time_input.fill(full_dash)
-            await page.keyboard.press("Enter")
-            
-            # 點擊 Escape 鍵把日曆的小彈窗收起來
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(500)
-            
-            ts("  推播時間設定完成")
-            return True
-        else:
-            ts("  [警告] 畫面上找不到推播時間欄位")
-            return False
-            
+        # 2. 先點擊一下，啟動組件
+        await target.click()
+        await page.wait_for_timeout(300)
+
+        # 3. 【核心修正】暴力注入 Vue State
+        # 這會直接修改網頁底層的變數，確保網頁「知道」我們填了時間
+        injected = await page.evaluate("""(val) => {
+            let found = false;
+            document.querySelectorAll('*').forEach(el => {
+                const v = el.__vue__;
+                if (v && v.$data) {
+                    // 尋找包含 time 或 date 字眼的變數並強制設值
+                    const keys = Object.keys(v.$data);
+                    const timeKey = keys.find(k => k.toLowerCase().includes('time') || k.toLowerCase().includes('date'));
+                    if (timeKey) {
+                        v.$data[timeKey] = val;
+                        // 觸發 Vue 的更新事件
+                        if (typeof v.$emit === 'function') {
+                            v.$emit('input', val);
+                            v.$emit('update:modelValue', val);
+                        }
+                        found = true;
+                    }
+                }
+            });
+            return found;
+        }""", full_val)
+
+        # 4. 輔助：模擬人工清空並打字 (雙重保險)
+        await page.keyboard.press("Control+A")
+        await page.keyboard.press("Meta+A")
+        await page.keyboard.press("Backspace")
+        await target.type(full_val, delay=50)
+        await page.keyboard.press("Enter")
+        await page.keyboard.press("Escape")
+        
+        ts(f"  推播時間設定完成 (底層注入狀態: {injected})")
+        return True
     except Exception as e:
         ts(f"  推播時間設定失敗：{e}")
         return False
@@ -1923,6 +1943,8 @@ async def _set_cm_datepicker(page: Page, date_str: str, time_str: str) -> bool:
 
 async def stage3_push(ctx: BrowserContext, push_content: str, deeplink: str):
     ts("─── 第三階段：推播流程 開始 ───")
+    pushed_id = _extract_id(deeplink)
+    ts(f"  [驗證] 目前準備推播的文章 ID 為：{pushed_id}")
     ts(f"  推播內容 : {push_content}")
     ts(f"  Deeplink : {deeplink}")
 
