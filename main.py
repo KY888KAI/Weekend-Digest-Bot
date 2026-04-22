@@ -1367,21 +1367,51 @@ async def stage2_post(ctx: BrowserContext, title: str, body: str, test_mode: boo
         ts("等待發文完成...")
         await page.wait_for_timeout(5_000)
 
-        article_id = _extract_id(page.url)
-        if not article_id:
-            for sel in ['a[href*="article"]', 'a[href*="post"]', 'time a', '.post-time a']:
-                try:
-                    el = page.locator(sel).last
-                    if await el.count() > 0:
-                        href = await el.get_attribute("href") or ""
-                        article_id = _extract_id(href)
-                        if article_id:
-                            break
-                except Exception:
-                    pass
+        # ================= 替換開始：DOM X光掃描抓 ID =================
+        ts("發文完成，啟動 DOM 底層掃描來精準抓取專屬文章 ID...")
+        # 抓取內文前 15 個字當作專屬特徵
+        snippet = body[:15].replace('\n', ' ').replace('\r', '')
+        
+        try:
+            post_url = await page.evaluate(f"""
+                () => {{
+                    const links = Array.from(document.querySelectorAll('a[href*="/article/"]'));
+                    for (let link of links) {{
+                        let parent = link.parentElement;
+                        for (let i = 0; i < 8; i++) {{
+                            if (parent && parent.innerText && parent.innerText.includes('{snippet}')) {{
+                                return link.href; 
+                            }}
+                            parent = parent.parentElement;
+                        }}
+                    }}
+                    return "";
+                }}
+            """)
+            
+            if post_url:
+                ts(f"  底層掃描成功！鎖定專屬貼文網址：{post_url}")
+                article_id = _extract_id(post_url)
+            else:
+                ts("  底層掃描未比對到相符的貼文，改用備用方案...")
+                article_id = _extract_id(page.url)
+                if not article_id:
+                    for sel in ['a[href*="article"]', 'a[href*="post"]', 'time a', '.post-time a']:
+                        try:
+                            el = page.locator(sel).last
+                            if await el.count() > 0:
+                                href = await el.get_attribute("href") or ""
+                                article_id = _extract_id(href)
+                                if article_id: break
+                        except Exception:
+                            pass
+        except Exception as e:
+            ts(f"  DOM 掃描發生錯誤：{e}")
+            article_id = ""
 
         if not article_id:
             raise RuntimeError("無法自動取得文章 ID，請至同學會個人頁面手動確認文章是否已發出")
+        # ================= 替換結束 =================
 
     await page.close()
     ts(f"  文章 ID：{article_id}")
@@ -1857,68 +1887,38 @@ async def _cm_select_by_label(page: Page, label_text: str, option_text: str) -> 
 async def _set_cm_datepicker(page: Page, date_str: str, time_str: str) -> bool:
     """
     設定 cm-datePicker 的日期時間。
-    優先嘗試 Vue data 注入，再試 native value setter + 多種格式。
-    date_str: "YYYY/MM/DD"，time_str: "HH:MM"
+    改用 Playwright 原生強制填值，避免 Vue 變數改版造成的 Invalid Time。
     """
-    full_slash  = f"{date_str} {time_str}"                          # 2026/04/21 20:25
-    full_dash   = date_str.replace("/", "-") + " " + time_str       # 2026-04-21 20:25
-    ts(f"  設定推播時間：{full_slash}")
+    # 系統最容易看懂的格式通常是橫槓 (2026-04-21 20:25)
+    full_dash = date_str.replace("/", "-") + " " + time_str
+    ts(f"  使用 Playwright 強制填值設定推播時間：{full_dash}")
 
-    # ── 方法1：Vue data 直接注入 ────────────────────────────────
-    injected = await page.evaluate("""([slash, dash]) => {
-        for (const el of document.querySelectorAll('*')) {
-            const v = el.__vue__;
-            if (!v || !v.$data) continue;
-            const d = v.$data;
-            // 常見 cm-datePicker binding key
-            for (const key of ['value', 'modelValue', 'dateValue', 'datetimeValue',
-                                'selectedDate', 'date', 'time', 'datetime']) {
-                if (key in d) {
-                    d[key] = slash;
-                    try { v.$emit('input', slash); v.$emit('update:modelValue', slash); } catch(e){}
-                    return 'vue:' + key;
-                }
-            }
-        }
-        return null;
-    }""", [full_slash, full_dash])
-    if injected:
-        ts(f"  推播時間 Vue 注入：{injected}")
-        await page.wait_for_timeout(400)
-
-    # ── 方法2：native value setter + 多種格式 ─────────────────
-    set_result = await page.evaluate("""([slash, dash]) => {
-        const sels = [
-            '.cm-datePicker input.cm-input__defaultInput',
-            'input[placeholder*="日期"]',
-            'input[placeholder*="請選擇日期"]',
-        ];
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        for (const sel of sels) {
-            const inp = document.querySelector(sel);
-            if (!inp) continue;
-            // 試 slash 格式，再試 dash 格式
-            for (const val of [slash, dash]) {
-                setter.call(inp, val);
-                inp.dispatchEvent(new Event('input',  { bubbles: true }));
-                inp.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            return 'dom-set:' + inp.placeholder;
-        }
-        return null;
-    }""", [full_slash, full_dash])
-    if set_result:
-        ts(f"  推播時間 DOM 設定：{set_result}")
-    await page.wait_for_timeout(300)
-    await page.keyboard.press("Escape")   # 關閉可能展開的日曆彈窗
-    await page.wait_for_timeout(300)
-
-    if injected or set_result:
-        ts("  推播時間設定完成（請人工確認欄位是否正確顯示）")
-        return True
-
-    ts("  [警告] 推播時間欄位找不到，請確認頁面結構")
-    return False
+    try:
+        # 鎖定推播時間的輸入框
+        time_input = page.locator('.cm-datePicker input.cm-input__defaultInput, input[placeholder*="日期"], input[placeholder*="請選擇日期"]').first
+        
+        if await time_input.count() > 0:
+            await time_input.wait_for(state="visible", timeout=5000)
+            
+            # 點擊框框並強制覆蓋數值
+            await time_input.click()
+            await page.wait_for_timeout(300)
+            await time_input.fill(full_dash)
+            await page.keyboard.press("Enter")
+            
+            # 點擊 Escape 鍵把日曆的小彈窗收起來
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(500)
+            
+            ts("  推播時間設定完成")
+            return True
+        else:
+            ts("  [警告] 畫面上找不到推播時間欄位")
+            return False
+            
+    except Exception as e:
+        ts(f"  推播時間設定失敗：{e}")
+        return False
 
 
 async def stage3_push(ctx: BrowserContext, push_content: str, deeplink: str):
